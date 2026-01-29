@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>書類チェッカー</title>
+    <script type="module" src="/main.js" defer></script>
+  </head>
+
+  <body>
+    <div class="app">
+      <header>
+        <h1>📄 書類チェッカー</h1>
+        <div id="api-status" class="status"></div>
+      </header>
+
+      <main>
+        <section class="controls">
+          <div class="control-group">
+            <label>監視フォルダ:</label>
+            <input type="text" id="folder-path" placeholder="C:\Documents\工事書類" />
+            <button id="browse-btn">参照</button>
+            <button id="start-btn">監視開始</button>
+            <button id="stop-btn" disabled>監視停止</button>
+          </div>
+
+          <div class="control-group">
+            <label>手動チェック:</label>
+            <input type="file" id="file-input" accept=".pdf" />
+            <button id="check-btn">チェック実行</button>
+          </div>
+        </section>
+
+        <section class="status-bar">
+          <span id="watch-status">⏸️ 待機中</span>
+          <span id="last-check">最終チェック: -</span>
+        </section>
+
+        <section class="results">
+          <h2>チェック履歴</h2>
+          <div id="results-list" class="results-list">
+            <p class="placeholder">チェック結果がここに表示されます</p>
+          </div>
+        </section>
+      </main>
+
+      <footer>
+        <div class="api-key-section">
+          <input type="password" id="api-key" placeholder="Anthropic API Key" />
+          <button id="save-key-btn">保存</button>
+        </div>
+      </footer>
+    </div>
+  </body>
+</html>
