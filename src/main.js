@@ -1,4 +1,5 @@
 const { invoke } = window.__TAURI__.core;
+const { open } = window.__TAURI__.dialog;
 
 // State
 let isWatching = false;
@@ -7,6 +8,7 @@ let pollInterval = null;
 // Initialize
 window.addEventListener("DOMContentLoaded", async () => {
   // Event listeners
+  document.querySelector("#browse-btn").addEventListener("click", browseFolder);
   document.querySelector("#start-btn").addEventListener("click", startWatching);
   document.querySelector("#stop-btn").addEventListener("click", stopWatching);
   document.querySelector("#clear-pending-btn").addEventListener("click", clearPending);
@@ -40,6 +42,21 @@ async function checkCliStatus() {
 }
 
 // ========== Folder Watching ==========
+
+async function browseFolder() {
+  try {
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      title: "監視フォルダを選択"
+    });
+    if (selected) {
+      document.querySelector("#folder-path").value = selected;
+    }
+  } catch (e) {
+    console.error("Browse error:", e);
+  }
+}
 
 async function startWatching() {
   const folderPath = document.querySelector("#folder-path").value.trim();
