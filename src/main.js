@@ -9,8 +9,9 @@ let fileInputEl;
 let watchStatusEl;
 let lastCheckEl;
 let resultsListEl;
-let apiKeyEl;
-let apiStatusEl;
+let cliStatusEl;
+let guidelinesDialog;
+let guidelinesTextEl;
 
 let isWatching = false;
 
@@ -25,43 +26,50 @@ window.addEventListener("DOMContentLoaded", async () => {
   watchStatusEl = document.querySelector("#watch-status");
   lastCheckEl = document.querySelector("#last-check");
   resultsListEl = document.querySelector("#results-list");
-  apiKeyEl = document.querySelector("#api-key");
-  apiStatusEl = document.querySelector("#api-status");
+  cliStatusEl = document.querySelector("#cli-status");
+  guidelinesDialog = document.querySelector("#guidelines-dialog");
+  guidelinesTextEl = document.querySelector("#guidelines-text");
 
   // Event listeners
   startBtnEl.addEventListener("click", startWatching);
   stopBtnEl.addEventListener("click", stopWatching);
   checkBtnEl.addEventListener("click", checkManually);
-  document.querySelector("#save-key-btn").addEventListener("click", saveApiKey);
+  document.querySelector("#edit-guidelines-btn").addEventListener("click", openGuidelinesDialog);
+  document.querySelector("#save-guidelines-btn").addEventListener("click", saveGuidelines);
+  document.querySelector("#close-dialog-btn").addEventListener("click", () => guidelinesDialog.close());
 
-  // Check API key status
-  await checkApiStatus();
+  // Check Claude CLI status
+  await checkCliStatus();
 
   // Load history
   await loadHistory();
 });
 
-async function checkApiStatus() {
+async function checkCliStatus() {
   try {
-    const hasKey = await invoke("get_api_key_status");
-    apiStatusEl.textContent = hasKey ? "🟢 API Key設定済み" : "🔴 API Key未設定";
+    const hasCliude = await invoke("check_claude_cli");
+    cliStatusEl.textContent = hasCliude ? "🟢 Claude CLI 利用可能" : "🔴 Claude CLI 未検出";
   } catch (e) {
-    apiStatusEl.textContent = "⚠️ 状態不明";
+    cliStatusEl.textContent = "⚠️ 状態不明";
   }
 }
 
-async function saveApiKey() {
-  const key = apiKeyEl.value.trim();
-  if (!key) {
-    alert("API Keyを入力してください");
-    return;
-  }
-
+async function openGuidelinesDialog() {
   try {
-    await invoke("set_api_key", { key });
-    apiKeyEl.value = "";
-    await checkApiStatus();
-    alert("API Keyを保存しました");
+    const guidelines = await invoke("get_guidelines");
+    guidelinesTextEl.value = guidelines || "";
+  } catch (e) {
+    guidelinesTextEl.value = "";
+  }
+  guidelinesDialog.showModal();
+}
+
+async function saveGuidelines() {
+  const content = guidelinesTextEl.value;
+  try {
+    const path = await invoke("save_guidelines", { content });
+    alert("ガイドラインを保存しました: " + path);
+    guidelinesDialog.close();
   } catch (e) {
     alert("エラー: " + e);
   }
@@ -114,10 +122,8 @@ async function checkManually() {
 
   try {
     for (const file of files) {
-      // Note: In Tauri, we need to get the actual file path
-      // For now, we'll use a workaround with the file name
       const result = await invoke("check_pdf_manually", {
-        filePath: file.name // This will need proper file path handling
+        filePath: file.name
       });
 
       addResultToList(result);
@@ -150,7 +156,6 @@ async function loadHistory() {
 }
 
 function addResultToList(result) {
-  // Remove placeholder if exists
   const placeholder = resultsListEl.querySelector(".placeholder");
   if (placeholder) {
     placeholder.remove();
@@ -164,7 +169,6 @@ function addResultToList(result) {
     <div class="time">${escapeHtml(result.checked_at)}</div>
   `;
 
-  // Add click handler to show details
   if (result.details) {
     item.style.cursor = "pointer";
     item.addEventListener("click", () => {
@@ -172,7 +176,6 @@ function addResultToList(result) {
     });
   }
 
-  // Insert at the top
   resultsListEl.insertBefore(item, resultsListEl.firstChild);
 }
 

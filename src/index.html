@@ -46,11 +46,21 @@
       </main>
 
       <footer>
-        <div class="api-key-section">
-          <input type="password" id="api-key" placeholder="Anthropic API Key" />
-          <button id="save-key-btn">保存</button>
+        <div class="guidelines-section">
+          <button id="edit-guidelines-btn">📝 ガイドライン編集</button>
+          <span id="cli-status"></span>
         </div>
       </footer>
+
+      <!-- ガイドライン編集モーダル -->
+      <dialog id="guidelines-dialog">
+        <h3>検証ガイドライン</h3>
+        <textarea id="guidelines-text" placeholder="検証時に参照するガイドラインを記述..."></textarea>
+        <div class="dialog-buttons">
+          <button id="save-guidelines-btn">保存</button>
+          <button id="close-dialog-btn">閉じる</button>
+        </div>
+      </dialog>
     </div>
   </body>
 </html>

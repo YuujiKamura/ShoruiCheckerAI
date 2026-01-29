@@ -97,14 +97,22 @@ async fn check_pdf_manually(
 }
 
 #[tauri::command]
-fn get_api_key_status() -> bool {
-    std::env::var("ANTHROPIC_API_KEY").is_ok()
+fn get_guidelines() -> Option<String> {
+    claude_api::load_guidelines()
 }
 
 #[tauri::command]
-fn set_api_key(key: String) -> Result<(), String> {
-    std::env::set_var("ANTHROPIC_API_KEY", key);
-    Ok(())
+fn save_guidelines(content: String) -> Result<String, String> {
+    claude_api::save_guidelines(&content)
+}
+
+#[tauri::command]
+fn check_claude_cli() -> bool {
+    std::process::Command::new("claude")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -127,8 +135,9 @@ pub fn run() {
             stop_watching,
             get_check_history,
             check_pdf_manually,
-            get_api_key_status,
-            set_api_key,
+            get_guidelines,
+            save_guidelines,
+            check_claude_cli,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
