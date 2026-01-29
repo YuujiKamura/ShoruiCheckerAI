@@ -12,33 +12,37 @@
     <div class="app">
       <header>
         <h1>📄 書類チェッカー</h1>
-        <div id="api-status" class="status"></div>
+        <span id="cli-status"></span>
       </header>
 
       <main>
+        <!-- 監視設定 -->
         <section class="controls">
           <div class="control-group">
             <label>監視フォルダ:</label>
             <input type="text" id="folder-path" placeholder="C:\Documents\工事書類" />
-            <button id="browse-btn">参照</button>
             <button id="start-btn">監視開始</button>
             <button id="stop-btn" disabled>監視停止</button>
           </div>
-
-          <div class="control-group">
-            <label>手動チェック:</label>
-            <input type="file" id="file-input" accept=".pdf" />
-            <button id="check-btn">チェック実行</button>
+          <div class="status-bar">
+            <span id="watch-status">⏸️ 待機中</span>
           </div>
         </section>
 
-        <section class="status-bar">
-          <span id="watch-status">⏸️ 待機中</span>
-          <span id="last-check">最終チェック: -</span>
+        <!-- 検出されたファイル -->
+        <section class="pending-section">
+          <div class="section-header">
+            <h2>📥 検出ファイル <span id="pending-count">(0)</span></h2>
+            <button id="clear-pending-btn" class="small-btn">クリア</button>
+          </div>
+          <div id="pending-list" class="file-list">
+            <p class="placeholder">新しいPDFがここに表示されます</p>
+          </div>
         </section>
 
+        <!-- チェック履歴 -->
         <section class="results">
-          <h2>チェック履歴</h2>
+          <h2>📋 チェック履歴</h2>
           <div id="results-list" class="results-list">
             <p class="placeholder">チェック結果がここに表示されます</p>
           </div>
@@ -46,19 +50,48 @@
       </main>
 
       <footer>
-        <div class="guidelines-section">
-          <button id="edit-guidelines-btn">📝 ガイドライン編集</button>
-          <span id="cli-status"></span>
-        </div>
+        <button id="edit-policy-btn">⚙️ 自動解析ポリシー</button>
+        <button id="edit-guidelines-btn">📝 ガイドライン</button>
       </footer>
 
-      <!-- ガイドライン編集モーダル -->
+      <!-- ポリシー編集ダイアログ -->
+      <dialog id="policy-dialog">
+        <h3>自動解析ポリシー</h3>
+        <div class="form-group">
+          <label>
+            <input type="checkbox" id="policy-auto" />
+            自動解析を有効にする
+          </label>
+        </div>
+        <div class="form-group">
+          <label>対象パターン (カンマ区切り):</label>
+          <input type="text" id="policy-include" placeholder="材料,品質,出来形" />
+          <small>空欄の場合は全てのPDFが対象</small>
+        </div>
+        <div class="form-group">
+          <label>除外パターン (カンマ区切り):</label>
+          <input type="text" id="policy-exclude" placeholder="test,draft,下書き" />
+        </div>
+        <div class="form-group">
+          <label>ファイルサイズ:</label>
+          <div class="size-inputs">
+            <input type="number" id="policy-min-size" placeholder="1" /> KB 〜
+            <input type="number" id="policy-max-size" placeholder="50000" /> KB
+          </div>
+        </div>
+        <div class="dialog-buttons">
+          <button id="save-policy-btn">保存</button>
+          <button id="close-policy-btn">閉じる</button>
+        </div>
+      </dialog>
+
+      <!-- ガイドライン編集ダイアログ -->
       <dialog id="guidelines-dialog">
         <h3>検証ガイドライン</h3>
         <textarea id="guidelines-text" placeholder="検証時に参照するガイドラインを記述..."></textarea>
         <div class="dialog-buttons">
           <button id="save-guidelines-btn">保存</button>
-          <button id="close-dialog-btn">閉じる</button>
+          <button id="close-guidelines-btn">閉じる</button>
         </div>
       </dialog>
     </div>
