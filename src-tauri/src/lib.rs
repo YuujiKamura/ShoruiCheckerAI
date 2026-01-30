@@ -208,80 +208,31 @@ async fn analyze_pdfs(app: AppHandle, paths: Vec<String>) -> Result<String, Stri
 
     emit_log(&app, "=== PDF整合性チェック開始 ===", "info");
 
-    // Create temp directory for images
-    let temp_dir = std::env::temp_dir().join(format!("pdf_analyze_{}", std::process::id()));
+    // Create temp directory in user home (Gemini CLI can access this)
+    let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let temp_dir = home_dir.join(".shoruichecker_temp");
     fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
-    emit_log(&app, &format!("作業ディレクトリ: {}", temp_dir.display()), "info");
 
-    let mut image_files: Vec<String> = Vec::new();
-
-    // Convert each PDF to PNG
+    // Copy PDF files to temp directory (Gemini CLI security restriction)
+    let mut copied_files: Vec<String> = Vec::new();
     for (i, path) in paths.iter().enumerate() {
         let pdf_path = Path::new(path);
         let file_name = pdf_path.file_name()
             .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| "unknown".to_string());
+            .unwrap_or_else(|| format!("file_{}.pdf", i));
 
-        emit_log(&app, &format!("[{}/{}] PDF変換中: {}", i + 1, paths.len(), file_name), "info");
+        emit_log(&app, &format!("[{}/{}] {}", i + 1, paths.len(), file_name), "info");
 
-        let base_name = pdf_path.file_stem()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| "pdf".to_string());
-
-        let output_prefix = temp_dir.join(&base_name);
-
-        // Run pdftoppm
-        let status = Command::new("pdftoppm")
-            .args([
-                "-png",
-                "-r", "200",
-                path,
-                output_prefix.to_string_lossy().as_ref(),
-            ])
-            .status()
-            .map_err(|e| {
-                emit_log(&app, &format!("pdftoppm実行エラー: {}", e), "error");
-                format!("pdftoppm実行エラー: {}", e)
-            })?;
-
-        if !status.success() {
-            emit_log(&app, &format!("PDF変換失敗: {}", path), "error");
-            return Err(format!("PDF変換失敗: {}", path));
-        }
-
-        emit_log(&app, &format!("  ✓ {} 変換完了", file_name), "success");
-
-        // Collect generated images
-        if let Ok(entries) = fs::read_dir(&temp_dir) {
-            for entry in entries.flatten() {
-                let entry_path = entry.path();
-                if entry_path.to_string_lossy().contains(&base_name)
-                    && entry_path.extension().map(|e| e == "png").unwrap_or(false)
-                {
-                    let img_path = entry_path.to_string_lossy().to_string();
-                    if !image_files.contains(&img_path) {
-                        image_files.push(img_path);
-                    }
-                }
-            }
-        }
+        let dest_path = temp_dir.join(&file_name);
+        fs::copy(path, &dest_path).map_err(|e| format!("ファイルコピーエラー: {}", e))?;
+        copied_files.push(dest_path.to_string_lossy().to_string());
     }
-
-    if image_files.is_empty() {
-        let _ = fs::remove_dir_all(&temp_dir);
-        emit_log(&app, "画像の生成に失敗しました", "error");
-        return Err("画像の生成に失敗しました".to_string());
-    }
-
-    // Sort images
-    image_files.sort();
-    emit_log(&app, &format!("生成画像数: {} ページ", image_files.len()), "info");
 
     // Build prompt with document check instructions
     let prompt = format!(
         r#"あなたは日本語で回答するアシスタントです。必ず日本語で回答してください。
 
-以下の画像はPDFから変換した書類です。書類の内容を読み取り、整合性をチェックしてください。
+添付のPDF書類の内容を読み取り、整合性をチェックしてください。
 
 ## 注意事項
 - 文字は正確に読み取ること（特に地名、人名、会社名）
@@ -332,27 +283,22 @@ async fn analyze_pdfs(app: AppHandle, paths: Vec<String>) -> Result<String, Stri
 
     // Create PowerShell script file for proper argument handling
     let script_file = temp_dir.join("run_gemini.ps1");
-    // Use just file names since we run from temp_dir
-    let image_array = image_files.iter()
-        .map(|p| {
-            let file_name = Path::new(p).file_name()
-                .map(|f| f.to_string_lossy().to_string())
-                .unwrap_or_else(|| p.clone());
-            format!("    '{}'", file_name.replace("'", "''"))
-        })
+    // Use copied PDF paths (in user home directory for Gemini CLI access)
+    let pdf_array = copied_files.iter()
+        .map(|p| format!("    '{}'", p.replace("'", "''")))
         .collect::<Vec<_>>()
         .join(",\n");
 
     let ps_script = format!(
         r#"$OutputEncoding = [Console]::OutputEncoding = [Text.Encoding]::UTF8
 $prompt = Get-Content -Raw -Encoding UTF8 '{}'
-$images = @(
+$pdfs = @(
 {}
 )
-& '{}' -m {} -o text $prompt $images
+& '{}' -m {} -o text $prompt $pdfs
 "#,
         prompt_file.to_string_lossy().replace("'", "''"),
-        image_array,
+        pdf_array,
         gemini_path.replace("'", "''"),
         model
     );
@@ -375,7 +321,7 @@ $images = @(
         emit_log(&app, "✓ 解析完了", "success");
         let result = String::from_utf8_lossy(&output.stdout).to_string();
         let result = result.lines()
-            .filter(|line| !line.contains("Loaded cached credentials"))
+            .filter(|line| !line.contains("Loaded cached credentials") && !line.contains("Hook registry initialized"))
             .collect::<Vec<_>>()
             .join("\n");
         Ok(result)
