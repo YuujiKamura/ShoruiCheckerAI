@@ -53,6 +53,16 @@ window.addEventListener("DOMContentLoaded", async () => {
     await invoke("set_model", { model: e.target.value });
   });
 
+  // Check for startup file (CLI argument)
+  const startupFile = await invoke("get_startup_file");
+  if (startupFile) {
+    const name = startupFile.split(/[\\/]/).pop();
+    pdfFiles.push({ name, path: startupFile, checked: true });
+    updateList();
+    // Auto-analyze after short delay
+    setTimeout(() => analyze("individual"), 500);
+  }
+
   // Check Gemini auth status (delayed to avoid blocking startup)
   setTimeout(() => checkAuthStatus(), 2000);
 
@@ -181,12 +191,14 @@ window.addEventListener("DOMContentLoaded", async () => {
   const compareBtn = document.getElementById("compare-btn");
   const selectAllBtn = document.getElementById("select-all-btn");
   const selectNoneBtn = document.getElementById("select-none-btn");
+  const guidelinesBtn = document.getElementById("guidelines-btn");
 
   analyzeBtn.addEventListener("click", () => analyze("individual"));
   compareBtn.addEventListener("click", () => analyze("compare"));
   clearBtn.addEventListener("click", clearFiles);
   selectAllBtn.addEventListener("click", selectAll);
   selectNoneBtn.addEventListener("click", selectNone);
+  guidelinesBtn.addEventListener("click", generateGuidelines);
 });
 
 async function checkAuthStatus() {
@@ -278,10 +290,13 @@ function toggleFile(index) {
 function updateButtons() {
   const analyzeBtn = document.getElementById("analyze-btn");
   const compareBtn = document.getElementById("compare-btn");
+  const guidelinesBtn = document.getElementById("guidelines-btn");
   const checkedCount = pdfFiles.filter(f => f.checked).length;
+  const checkedWithResults = pdfFiles.filter(f => f.checked && f.result && !f.resultError).length;
 
   analyzeBtn.disabled = checkedCount === 0;
   compareBtn.disabled = checkedCount < 2;
+  guidelinesBtn.disabled = checkedWithResults === 0;
 }
 
 function getCheckedFiles() {
@@ -433,6 +448,62 @@ async function analyze(mode = "individual") {
   } finally {
     updateButtons();
     progressUnlisten();
+    if (logUnlisten) {
+      logUnlisten();
+      logUnlisten = null;
+    }
+  }
+}
+
+// ガイドライン生成
+async function generateGuidelines() {
+  // Get checked files with results
+  const filesWithResults = pdfFiles.filter(f => f.checked && f.result && !f.resultError);
+  if (filesWithResults.length === 0) {
+    alert("解析結果のあるファイルを選択してください");
+    return;
+  }
+
+  const paths = filesWithResults.map(f => f.path);
+  // Extract folder path from first file
+  const folder = paths[0].replace(/[\\/][^\\/]+$/, "");
+
+  const terminalSection = document.getElementById("terminal-section");
+  const resultSection = document.getElementById("result-section");
+  const resultContent = document.getElementById("result-content");
+  const guidelinesBtn = document.getElementById("guidelines-btn");
+
+  // Show terminal
+  terminalSection.hidden = false;
+  resultSection.hidden = true;
+  clearTerminal();
+  guidelinesBtn.disabled = true;
+
+  // Listen for log events
+  if (logUnlisten) {
+    logUnlisten();
+  }
+  logUnlisten = await listen("log", (event) => {
+    const { message, level } = event.payload;
+    appendLog(message, level);
+  });
+
+  try {
+    appendLog(`対象: ${filesWithResults.length} ファイル`, "info");
+    appendLog("PDFから埋め込みデータを収集中...", "wave");
+
+    const customInstruction = document.getElementById("custom-instruction").value.trim();
+    const result = await invoke("generate_guidelines", { paths, folder, customInstruction });
+
+    resultContent.innerHTML = `<h2>📋 ガイドライン</h2><hr>` + markdownToHtml(result);
+    resultSection.hidden = false;
+    appendLog("ガイドライン生成完了", "success");
+  } catch (e) {
+    appendLog(`エラー: ${e.toString()}`, "error");
+    resultContent.innerHTML = `<p style="color: #ff4757;">エラー: ${escapeHtml(e.toString())}</p>`;
+    resultSection.hidden = false;
+  } finally {
+    updateButtons();
     if (logUnlisten) {
       logUnlisten();
       logUnlisten = null;
