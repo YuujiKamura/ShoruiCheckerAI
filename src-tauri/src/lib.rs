@@ -205,36 +205,23 @@ fn start_watcher(app: AppHandle, folder: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// PDFを解析 (Gemini CLI使用)
-#[tauri::command]
-async fn analyze_pdfs(app: AppHandle, paths: Vec<String>) -> Result<String, String> {
-    if paths.is_empty() {
-        return Err("ファイルが指定されていません".to_string());
-    }
+/// 単一PDFを解析する内部関数
+fn analyze_single_pdf(path: &str, task_id: &str, model: &str) -> Result<String, String> {
+    let pdf_path = Path::new(path);
+    let file_name = pdf_path.file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "unknown.pdf".to_string());
 
-    emit_log(&app, "=== PDF整合性チェック開始 ===", "info");
-
-    // Create temp directory in user home (Gemini CLI can access this)
+    // Create temp directory for this task
     let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    let temp_dir = home_dir.join(".shoruichecker_temp");
+    let temp_dir = home_dir.join(format!(".shoruichecker_temp_{}", task_id));
     fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
 
-    // Copy PDF files to temp directory (Gemini CLI security restriction)
-    let mut copied_files: Vec<String> = Vec::new();
-    for (i, path) in paths.iter().enumerate() {
-        let pdf_path = Path::new(path);
-        let file_name = pdf_path.file_name()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| format!("file_{}.pdf", i));
+    // Copy PDF to temp directory
+    let dest_path = temp_dir.join(&file_name);
+    fs::copy(path, &dest_path).map_err(|e| format!("ファイルコピーエラー: {}", e))?;
 
-        emit_log(&app, &format!("[{}/{}] {}", i + 1, paths.len(), file_name), "info");
-
-        let dest_path = temp_dir.join(&file_name);
-        fs::copy(path, &dest_path).map_err(|e| format!("ファイルコピーエラー: {}", e))?;
-        copied_files.push(dest_path.to_string_lossy().to_string());
-    }
-
-    // Build prompt with document check instructions
+    // Build prompt
     let prompt = format!(
         r#"あなたは日本語で回答するアシスタントです。必ず日本語で回答してください。
 
@@ -253,79 +240,54 @@ async fn analyze_pdfs(app: AppHandle, paths: Vec<String>) -> Result<String, Stri
 - 工期の日付が妥当か（着工日 < 完成日）
 - 必要な署名・押印欄があるか
 - 選択肢形式の項目は○（丸）がついている選択肢を読み取ること
-- 支払条件など複数選択肢がある場合、選択されている（○がついている）ものを基準に判断
 
 ### 交通誘導員配置実績の場合
 - 人数欄の数値と、実際に列挙された名前の数が一致するか
 - 集計表と伝票の人数・日付・時間が一致するか
-- 警備会社名の一致
 
-### 測量図面（縦断図・横断図）の場合
-- 横断図のGHはCL（中心線）位置の値を読み取る
+### 測量図面の場合
 - 縦断図と横断図の計画高・地盤高の照合
 
 ## 出力形式
 - まず書類タイプを判定して報告
-- 整合している項目は簡潔に「✓」で示す
+- 整合している項目は「✓」で示す
 - 問題がある項目は「⚠」で具体的に指摘
-- 数値の不一致は計算過程を示す
 
 ファイル: {}"#,
-        paths.join(", ")
+        file_name
     );
 
-    // Write prompt to temp file
     let prompt_file = temp_dir.join("prompt.txt");
-    fs::write(&prompt_file, &prompt).map_err(|e| format!("プロンプト書き込みエラー: {}", e))?;
+    fs::write(&prompt_file, &prompt).map_err(|e| e.to_string())?;
 
-    // Build gemini command
     let gemini_path = std::env::var("APPDATA")
         .map(|p| format!("{}\\npm\\gemini.cmd", p))
         .unwrap_or_else(|_| "gemini".to_string());
 
-    // Get selected model
-    let model = load_settings().model.unwrap_or_else(|| DEFAULT_MODEL.to_string());
-    emit_log(&app, &format!("{} で解析中...", model), "wave");
-
-    // Create PowerShell script file for proper argument handling
-    let script_file = temp_dir.join("run_gemini.ps1");
-    // Use copied PDF paths (in user home directory for Gemini CLI access)
-    let pdf_array = copied_files.iter()
-        .map(|p| format!("    '{}'", p.replace("'", "''")))
-        .collect::<Vec<_>>()
-        .join(",\n");
-
     let ps_script = format!(
         r#"$OutputEncoding = [Console]::OutputEncoding = [Text.Encoding]::UTF8
 $prompt = Get-Content -Raw -Encoding UTF8 '{}'
-$pdfs = @(
-{}
-)
-& '{}' -m {} -o text $prompt $pdfs
+& '{}' -m {} -o text $prompt '{}'
 "#,
         prompt_file.to_string_lossy().replace("'", "''"),
-        pdf_array,
         gemini_path.replace("'", "''"),
-        model
+        model,
+        dest_path.to_string_lossy().replace("'", "''")
     );
 
-    fs::write(&script_file, &ps_script).map_err(|e| format!("スクリプト書き込みエラー: {}", e))?;
+    let script_file = temp_dir.join("run.ps1");
+    fs::write(&script_file, &ps_script).map_err(|e| e.to_string())?;
 
     let mut cmd = Command::new("powershell");
     cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", &script_file.to_string_lossy()])
         .current_dir(&temp_dir);
     #[cfg(target_os = "windows")]
     cmd.creation_flags(CREATE_NO_WINDOW);
-    let output = cmd.output().map_err(|e| {
-        emit_log(&app, &format!("Gemini CLI実行エラー: {}", e), "error");
-        format!("Gemini CLI実行エラー: {}", e)
-    })?;
 
-    // Cleanup temp directory
+    let output = cmd.output().map_err(|e| e.to_string())?;
     let _ = fs::remove_dir_all(&temp_dir);
 
     if output.status.success() {
-        emit_log(&app, "✓ 解析完了", "success");
         let result = String::from_utf8_lossy(&output.stdout).to_string();
         let result = result.lines()
             .filter(|line| !line.contains("Loaded cached credentials") && !line.contains("Hook registry initialized"))
@@ -334,8 +296,106 @@ $pdfs = @(
         Ok(result)
     } else {
         let error = String::from_utf8_lossy(&output.stderr).to_string();
-        emit_log(&app, &format!("解析エラー: {}", error), "error");
-        Err(format!("解析エラー: {}", error))
+        Err(error)
+    }
+}
+
+#[derive(Clone, Serialize)]
+struct AnalysisResult {
+    file_name: String,
+    path: String,
+    result: Option<String>,
+    error: Option<String>,
+}
+
+/// PDFを並列解析 (Gemini CLI使用)
+#[tauri::command]
+async fn analyze_pdfs(app: AppHandle, paths: Vec<String>) -> Result<String, String> {
+    if paths.is_empty() {
+        return Err("ファイルが指定されていません".to_string());
+    }
+
+    let total = paths.len();
+    emit_log(&app, &format!("=== PDF整合性チェック開始 ({} ファイル) ===", total), "info");
+
+    // Get model setting
+    let model = load_settings().model.unwrap_or_else(|| DEFAULT_MODEL.to_string());
+
+    if total == 1 {
+        // Single file - simple execution
+        let path = &paths[0];
+        let file_name = Path::new(path).file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "unknown.pdf".to_string());
+
+        emit_log(&app, &format!("{} を解析中...", file_name), "wave");
+
+        match analyze_single_pdf(path, "single", &model) {
+            Ok(result) => {
+                emit_log(&app, "✓ 解析完了", "success");
+                Ok(result)
+            }
+            Err(e) => {
+                emit_log(&app, &format!("解析エラー: {}", e), "error");
+                Err(e)
+            }
+        }
+    } else {
+        // Multiple files - parallel execution
+        emit_log(&app, &format!("{} で {} ファイルを並列解析中...", model, total), "wave");
+
+        let mut handles = vec![];
+
+        for (i, path) in paths.into_iter().enumerate() {
+            let model_clone = model.clone();
+            let task_id = format!("task_{}", i);
+            let app_clone = app.clone();
+            let file_name = Path::new(&path).file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| format!("file_{}.pdf", i));
+
+            let handle = thread::spawn(move || {
+                let result = analyze_single_pdf(&path, &task_id, &model_clone);
+                let _ = app_clone.emit("analysis-progress", serde_json::json!({
+                    "file_name": file_name.clone(),
+                    "completed": true,
+                    "success": result.is_ok()
+                }));
+                AnalysisResult {
+                    file_name,
+                    path,
+                    result: result.clone().ok(),
+                    error: result.err(),
+                }
+            });
+            handles.push(handle);
+        }
+
+        // Collect results
+        let mut results: Vec<AnalysisResult> = vec![];
+        for handle in handles {
+            if let Ok(result) = handle.join() {
+                results.push(result);
+            }
+        }
+
+        // Format combined results
+        let mut output = String::new();
+        let success_count = results.iter().filter(|r| r.result.is_some()).count();
+
+        for r in &results {
+            output.push_str(&format!("\n## 📄 {}\n", r.file_name));
+            output.push_str("---\n");
+            if let Some(ref res) = r.result {
+                output.push_str(res);
+            } else if let Some(ref err) = r.error {
+                output.push_str(&format!("⚠ エラー: {}", err));
+            }
+            output.push_str("\n\n");
+        }
+
+        emit_log(&app, &format!("✓ 解析完了 ({}/{})", success_count, total), "success");
+        Ok(output)
     }
 }
 
