@@ -224,6 +224,18 @@ button {
   margin-top: 2px;
 }
 
+.file-info .analyzed-date {
+  color: #00d9ff;
+  font-size: 0.7rem;
+  margin-left: 8px;
+}
+
+.file-info .doc-type {
+  color: #ff9f43;
+  font-size: 0.75rem;
+  margin-left: 8px;
+}
+
 #pdf-list .remove {
   color: #666;
   cursor: pointer;

@@ -236,6 +236,35 @@ fn set_model(model: String) -> Result<(), String> {
     Ok(())
 }
 
+/// 全履歴を取得（フロントエンド用）
+#[tauri::command]
+fn get_all_history() -> Vec<AnalysisHistoryEntry> {
+    let config_dir = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
+    let history_dir = config_dir.join("shoruichecker").join("history");
+
+    if !history_dir.exists() {
+        return vec![];
+    }
+
+    let mut all_entries: Vec<AnalysisHistoryEntry> = vec![];
+
+    if let Ok(entries) = fs::read_dir(&history_dir) {
+        for entry in entries.flatten() {
+            if entry.path().extension().map(|e| e == "json").unwrap_or(false) {
+                if let Ok(content) = fs::read_to_string(entry.path()) {
+                    if let Ok(history) = serde_json::from_str::<AnalysisHistory>(&content) {
+                        all_entries.extend(history.entries);
+                    }
+                }
+            }
+        }
+    }
+
+    // Sort by analyzed_at descending
+    all_entries.sort_by(|a, b| b.analyzed_at.cmp(&a.analyzed_at));
+    all_entries
+}
+
 /// Open external terminal for Gemini authentication
 #[tauri::command]
 fn open_gemini_auth() -> Result<(), String> {
@@ -765,7 +794,8 @@ pub fn run() {
             open_gemini_auth,
             check_gemini_auth,
             get_model,
-            set_model
+            set_model,
+            get_all_history
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

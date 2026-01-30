@@ -17,16 +17,35 @@ window.addEventListener("DOMContentLoaded", async () => {
   const selectFolderBtn = document.getElementById("select-folder-btn");
   const settingsModal = document.getElementById("settings-modal");
 
-  // Load settings in parallel (non-blocking)
+  // Load settings and history in parallel (non-blocking)
   Promise.all([
     invoke("get_watch_folder"),
-    invoke("get_model")
-  ]).then(([watchFolder, currentModel]) => {
+    invoke("get_model"),
+    invoke("get_all_history")
+  ]).then(([watchFolder, currentModel, history]) => {
     if (watchFolder) {
       document.getElementById("watch-folder").value = watchFolder;
       document.getElementById("watch-status").textContent = "監視中: " + watchFolder;
     }
     document.getElementById("model-select").value = currentModel;
+
+    // Load history into file list
+    if (history && history.length > 0) {
+      for (const entry of history) {
+        // Skip if already in list
+        if (pdfFiles.find(f => f.path === entry.file_path)) continue;
+        pdfFiles.push({
+          name: entry.file_name,
+          path: entry.file_path,
+          checked: false,
+          result: entry.summary,
+          resultError: false,
+          analyzedAt: entry.analyzed_at,
+          documentType: entry.document_type
+        });
+      }
+      updateList();
+    }
   }).catch(console.error);
 
   // Model selection
@@ -208,6 +227,8 @@ function updateList() {
     const hasResult = f.result !== undefined;
     const statusIcon = hasResult ? (f.resultError ? '⚠' : '✓') : '';
     const statusClass = hasResult ? (f.resultError ? 'has-error' : 'has-result') : '';
+    const dateInfo = f.analyzedAt ? `<span class="analyzed-date">${f.analyzedAt}</span>` : '';
+    const typeInfo = f.documentType ? `<span class="doc-type">[${f.documentType}]</span>` : '';
 
     return `
     <li class="${statusClass}">
@@ -216,8 +237,9 @@ function updateList() {
         <div class="filename">
           ${statusIcon ? `<span class="status-icon">${statusIcon}</span>` : ''}
           ${escapeHtml(f.name)}
+          ${typeInfo}
         </div>
-        <div class="path">${escapeHtml(f.path)}</div>
+        <div class="path">${escapeHtml(f.path)} ${dateInfo}</div>
       </div>
       <button class="remove" onclick="removeFile(${i})">✕</button>
     </li>
@@ -352,6 +374,7 @@ async function analyze(mode = "individual") {
     const paths = checkedFiles.map(f => f.path);
     const result = await invoke("analyze_pdfs", { paths, mode });
 
+    const now = new Date().toLocaleString('ja-JP');
     if (mode === "compare") {
       // 照合モード: 全ファイルに同じ結果を紐付け
       checkedFiles.forEach(f => {
@@ -360,6 +383,8 @@ async function analyze(mode = "individual") {
           file.result = result;
           file.resultError = false;
           file.compareMode = true;
+          file.analyzedAt = now;
+          file.documentType = "照合解析";
         }
       });
       resultContent.innerHTML = markdownToHtml(result);
@@ -373,6 +398,7 @@ async function analyze(mode = "individual") {
           if (fileResult) {
             file.result = fileResult;
             file.resultError = false;
+            file.analyzedAt = now;
           }
         }
       });
