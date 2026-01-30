@@ -80,7 +80,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     const { path, name } = event.payload;
     // Add to file list automatically
     if (!pdfFiles.find(f => f.path === path)) {
-      pdfFiles.push({ name, path });
+      pdfFiles.push({ name, path, checked: true });
       updateList();
       // Show toast notification (info only)
       showToast(name);
@@ -115,7 +115,7 @@ window.addEventListener("DOMContentLoaded", async () => {
       if (path.toLowerCase().endsWith(".pdf")) {
         const name = path.split(/[\\/]/).pop();
         if (!pdfFiles.find(f => f.path === path)) {
-          pdfFiles.push({ name, path });
+          pdfFiles.push({ name, path, checked: true });
         }
       }
     }
@@ -142,7 +142,7 @@ window.addEventListener("DOMContentLoaded", async () => {
         for (const path of paths) {
           const name = path.split(/[\\/]/).pop();
           if (!pdfFiles.find(f => f.path === path)) {
-            pdfFiles.push({ name, path });
+            pdfFiles.push({ name, path, checked: true });
           }
         }
         updateList();
@@ -154,9 +154,14 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   // Button events
   const compareBtn = document.getElementById("compare-btn");
+  const selectAllBtn = document.getElementById("select-all-btn");
+  const selectNoneBtn = document.getElementById("select-none-btn");
+
   analyzeBtn.addEventListener("click", () => analyze("individual"));
   compareBtn.addEventListener("click", () => analyze("compare"));
   clearBtn.addEventListener("click", clearFiles);
+  selectAllBtn.addEventListener("click", selectAll);
+  selectNoneBtn.addEventListener("click", selectNone);
 });
 
 async function checkAuthStatus() {
@@ -196,15 +201,12 @@ function hideToast() {
 function updateList() {
   const list = document.getElementById("pdf-list");
   const count = document.getElementById("file-count");
-  const analyzeBtn = document.getElementById("analyze-btn");
-  const compareBtn = document.getElementById("compare-btn");
 
   count.textContent = `(${pdfFiles.length})`;
-  analyzeBtn.disabled = pdfFiles.length === 0;
-  compareBtn.disabled = pdfFiles.length < 2; // 照合は2ファイル以上必要
 
   list.innerHTML = pdfFiles.map((f, i) => `
     <li>
+      <input type="checkbox" class="file-check" data-index="${i}" ${f.checked ? 'checked' : ''} onchange="toggleFile(${i})">
       <div class="file-info">
         <div class="filename">${escapeHtml(f.name)}</div>
         <div class="path">${escapeHtml(f.path)}</div>
@@ -212,6 +214,36 @@ function updateList() {
       <button class="remove" onclick="removeFile(${i})">✕</button>
     </li>
   `).join("");
+
+  updateButtons();
+}
+
+function toggleFile(index) {
+  pdfFiles[index].checked = !pdfFiles[index].checked;
+  updateButtons();
+}
+
+function updateButtons() {
+  const analyzeBtn = document.getElementById("analyze-btn");
+  const compareBtn = document.getElementById("compare-btn");
+  const checkedCount = pdfFiles.filter(f => f.checked).length;
+
+  analyzeBtn.disabled = checkedCount === 0;
+  compareBtn.disabled = checkedCount < 2;
+}
+
+function getCheckedFiles() {
+  return pdfFiles.filter(f => f.checked);
+}
+
+function selectAll() {
+  pdfFiles.forEach(f => f.checked = true);
+  updateList();
+}
+
+function selectNone() {
+  pdfFiles.forEach(f => f.checked = false);
+  updateList();
 }
 
 function removeFile(index) {
@@ -283,7 +315,8 @@ async function analyze(mode = "individual") {
   });
 
   try {
-    const paths = pdfFiles.map(f => f.path);
+    const checkedFiles = getCheckedFiles();
+    const paths = checkedFiles.map(f => f.path);
     const result = await invoke("analyze_pdfs", { paths, mode });
 
     resultContent.innerHTML = markdownToHtml(result);
@@ -293,8 +326,7 @@ async function analyze(mode = "individual") {
     resultContent.innerHTML = `<p style="color: #ff4757;">エラー: ${escapeHtml(e.toString())}</p>`;
     resultSection.hidden = false;
   } finally {
-    analyzeBtn.disabled = pdfFiles.length === 0;
-    compareBtn.disabled = pdfFiles.length < 2;
+    updateButtons();
     if (logUnlisten) {
       logUnlisten();
       logUnlisten = null;
@@ -339,3 +371,4 @@ function markdownToHtml(md) {
 
 // Global functions for onclick
 window.removeFile = removeFile;
+window.toggleFile = toggleFile;
