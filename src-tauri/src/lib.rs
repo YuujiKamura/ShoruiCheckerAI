@@ -778,6 +778,11 @@ Get-Content -Raw -Encoding UTF8 'prompt.txt' | & '{}' -m {} -o text $pdfs
         }
         let _ = save_history(&history);
 
+        // Embed comparison result in all related PDFs
+        for path in paths {
+            let _ = embed_result_in_pdf(path, &result);
+        }
+
         Ok(result)
     } else {
         Err(String::from_utf8_lossy(&output.stderr).to_string())
