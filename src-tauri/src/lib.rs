@@ -34,6 +34,24 @@ struct AppSettings {
     model: Option<String>,
 }
 
+/// 解析履歴エントリ
+#[derive(Clone, Serialize, Deserialize)]
+struct AnalysisHistoryEntry {
+    file_name: String,
+    file_path: String,
+    analyzed_at: String,
+    document_type: Option<String>,
+    summary: String,
+    issues: Vec<String>,
+}
+
+/// 解析履歴（プロジェクト単位）
+#[derive(Clone, Serialize, Deserialize, Default)]
+struct AnalysisHistory {
+    project_folder: String,
+    entries: Vec<AnalysisHistoryEntry>,
+}
+
 const DEFAULT_MODEL: &str = "gemini-2.5-pro";
 
 // Global state for watcher
@@ -71,6 +89,115 @@ fn save_settings(settings: &AppSettings) -> Result<(), String> {
     let json = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
     fs::write(&path, json).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// 履歴ファイルのパスを取得（プロジェクトフォルダ単位）
+fn get_history_path(project_folder: &str) -> PathBuf {
+    let config_dir = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
+    let folder_hash = format!("{:x}", md5_hash(project_folder));
+    config_dir.join("shoruichecker").join("history").join(format!("{}.json", folder_hash))
+}
+
+/// 簡易MD5ハッシュ（フォルダパスからファイル名を生成）
+fn md5_hash(s: &str) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    s.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// 履歴を読み込む
+fn load_history(project_folder: &str) -> AnalysisHistory {
+    let path = get_history_path(project_folder);
+    if path.exists() {
+        fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_else(|| AnalysisHistory {
+                project_folder: project_folder.to_string(),
+                entries: vec![],
+            })
+    } else {
+        AnalysisHistory {
+            project_folder: project_folder.to_string(),
+            entries: vec![],
+        }
+    }
+}
+
+/// 履歴を保存
+fn save_history(history: &AnalysisHistory) -> Result<(), String> {
+    let path = get_history_path(&history.project_folder);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let json = serde_json::to_string_pretty(history).map_err(|e| e.to_string())?;
+    fs::write(&path, json).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 解析結果から履歴エントリを作成
+fn create_history_entry(file_name: &str, file_path: &str, result: &str) -> AnalysisHistoryEntry {
+    // 結果から書類タイプを抽出（簡易パース）
+    let document_type = if result.contains("契約書") {
+        Some("契約書".to_string())
+    } else if result.contains("見積") {
+        Some("見積書".to_string())
+    } else if result.contains("請求") {
+        Some("請求書".to_string())
+    } else if result.contains("配置実績") || result.contains("交通誘導") {
+        Some("交通誘導員配置実績".to_string())
+    } else {
+        None
+    };
+
+    // 問題点を抽出（⚠マーク行）
+    let issues: Vec<String> = result.lines()
+        .filter(|line| line.contains("⚠") || line.contains("警告") || line.contains("不整合") || line.contains("矛盾"))
+        .map(|s| s.trim().to_string())
+        .collect();
+
+    // 要約を作成（最初の数行）
+    let summary: String = result.lines()
+        .take(10)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    AnalysisHistoryEntry {
+        file_name: file_name.to_string(),
+        file_path: file_path.to_string(),
+        analyzed_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+        document_type,
+        summary,
+        issues,
+    }
+}
+
+/// 履歴からコンテキストを生成
+fn build_history_context(history: &AnalysisHistory) -> String {
+    if history.entries.is_empty() {
+        return String::new();
+    }
+
+    let mut context = String::from("\n\n## 過去の解析履歴（参考情報）\n");
+    context.push_str("以下は同じプロジェクトで過去に解析した書類の情報です。整合性チェック時に参照してください。\n\n");
+
+    for entry in history.entries.iter().rev().take(10) {
+        context.push_str(&format!("### {} ({})\n", entry.file_name, entry.analyzed_at));
+        if let Some(doc_type) = &entry.document_type {
+            context.push_str(&format!("- 書類タイプ: {}\n", doc_type));
+        }
+        if !entry.issues.is_empty() {
+            context.push_str("- 検出された問題:\n");
+            for issue in &entry.issues {
+                context.push_str(&format!("  - {}\n", issue));
+            }
+        }
+        context.push_str(&format!("- 要約: {}\n\n", entry.summary.lines().take(3).collect::<Vec<_>>().join(" ")));
+    }
+
+    context
 }
 
 #[tauri::command]
@@ -212,6 +339,15 @@ fn analyze_single_pdf(path: &str, task_id: &str, model: &str) -> Result<String, 
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "unknown.pdf".to_string());
 
+    // Get project folder (parent directory)
+    let project_folder = pdf_path.parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| ".".to_string());
+
+    // Load history for this project
+    let history = load_history(&project_folder);
+    let history_context = build_history_context(&history);
+
     // Create temp directory for this task
     let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     let temp_dir = home_dir.join(format!(".shoruichecker_temp_{}", task_id));
@@ -221,7 +357,7 @@ fn analyze_single_pdf(path: &str, task_id: &str, model: &str) -> Result<String, 
     let dest_path = temp_dir.join(&file_name);
     fs::copy(path, &dest_path).map_err(|e| format!("ファイルコピーエラー: {}", e))?;
 
-    // Build prompt
+    // Build prompt with history context
     let prompt = format!(
         r#"あなたは日本語で回答するアシスタントです。必ず日本語で回答してください。
 
@@ -252,8 +388,10 @@ fn analyze_single_pdf(path: &str, task_id: &str, model: &str) -> Result<String, 
 - まず書類タイプを判定して報告
 - 整合している項目は「✓」で示す
 - 問題がある項目は「⚠」で具体的に指摘
-
+- 過去の解析履歴がある場合、それとの整合性も確認すること
+{}
 ファイル: {}"#,
+        history_context,
         file_name
     );
 
@@ -264,11 +402,10 @@ fn analyze_single_pdf(path: &str, task_id: &str, model: &str) -> Result<String, 
         .map(|p| format!("{}\\npm\\gemini.cmd", p))
         .unwrap_or_else(|_| "gemini".to_string());
 
-    // Use relative filename since current_dir is temp_dir
+    // Use stdin pipe to pass multi-line prompt correctly
     let ps_script = format!(
         r#"$OutputEncoding = [Console]::OutputEncoding = [Text.Encoding]::UTF8
-$prompt = Get-Content -Raw -Encoding UTF8 'prompt.txt'
-& '{}' -m {} -o text $prompt '{}'
+Get-Content -Raw -Encoding UTF8 'prompt.txt' | & '{}' -m {} -o text '{}'
 "#,
         gemini_path.replace("'", "''"),
         model,
@@ -293,6 +430,19 @@ $prompt = Get-Content -Raw -Encoding UTF8 'prompt.txt'
             .filter(|line| !line.contains("Loaded cached credentials") && !line.contains("Hook registry initialized"))
             .collect::<Vec<_>>()
             .join("\n");
+
+        // Save to history
+        let entry = create_history_entry(&file_name, path, &result);
+        let mut history = load_history(&project_folder);
+        // Remove old entry for same file if exists
+        history.entries.retain(|e| e.file_name != file_name);
+        history.entries.push(entry);
+        // Keep only last 50 entries
+        if history.entries.len() > 50 {
+            history.entries = history.entries.split_off(history.entries.len() - 50);
+        }
+        let _ = save_history(&history);
+
         Ok(result)
     } else {
         let error = String::from_utf8_lossy(&output.stderr).to_string();
@@ -314,6 +464,16 @@ fn analyze_compare_pdfs(paths: &[String], model: &str) -> Result<String, String>
     let temp_dir = home_dir.join(".shoruichecker_temp_compare");
     fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
 
+    // Get project folder from first file
+    let project_folder = paths.first()
+        .and_then(|p| Path::new(p).parent())
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| ".".to_string());
+
+    // Load history
+    let history = load_history(&project_folder);
+    let history_context = build_history_context(&history);
+
     // Copy all PDFs
     let mut copied_files: Vec<String> = Vec::new();
     let mut file_names: Vec<String> = Vec::new();
@@ -329,7 +489,7 @@ fn analyze_compare_pdfs(paths: &[String], model: &str) -> Result<String, String>
         copied_files.push(dest_path.to_string_lossy().to_string());
     }
 
-    // Build comparison prompt
+    // Build comparison prompt with history
     let prompt = format!(
         r#"あなたは日本語で回答するアシスタントです。必ず日本語で回答してください。
 
@@ -344,13 +504,16 @@ fn analyze_compare_pdfs(paths: &[String], model: &str) -> Result<String, String>
 - 日付の整合性（契約日、工期、納期等）
 - 数量・単価の整合性
 - 印影・署名の有無
+- 過去の解析履歴との整合性
 
 ## 出力形式
 1. 各書類の概要を簡潔に説明
 2. 書類間で整合している項目は「✓」で示す
 3. 不整合や矛盾がある項目は「⚠」で具体的に指摘
-4. 総合判定（整合/要確認/不整合）"#,
-        file_names.join("\n")
+4. 総合判定（整合/要確認/不整合）
+{}"#,
+        file_names.join("\n"),
+        history_context
     );
 
     let prompt_file = temp_dir.join("prompt.txt");
@@ -360,20 +523,20 @@ fn analyze_compare_pdfs(paths: &[String], model: &str) -> Result<String, String>
         .map(|p| format!("{}\\npm\\gemini.cmd", p))
         .unwrap_or_else(|_| "gemini".to_string());
 
-    let pdf_array = copied_files.iter()
-        .map(|p| format!("    '{}'", p.replace("'", "''")))
+    // Use relative file names since current_dir is temp_dir
+    let pdf_array = file_names.iter()
+        .map(|f| format!("    '{}'", f.replace("'", "''")))
         .collect::<Vec<_>>()
         .join(",\n");
 
+    // Use stdin pipe to pass multi-line prompt correctly
     let ps_script = format!(
         r#"$OutputEncoding = [Console]::OutputEncoding = [Text.Encoding]::UTF8
-$prompt = Get-Content -Raw -Encoding UTF8 '{}'
 $pdfs = @(
 {}
 )
-& '{}' -m {} -o text $prompt $pdfs
+Get-Content -Raw -Encoding UTF8 'prompt.txt' | & '{}' -m {} -o text $pdfs
 "#,
-        prompt_file.to_string_lossy().replace("'", "''"),
         pdf_array,
         gemini_path.replace("'", "''"),
         model
@@ -397,6 +560,31 @@ $pdfs = @(
             .filter(|line| !line.contains("Loaded cached credentials") && !line.contains("Hook registry initialized"))
             .collect::<Vec<_>>()
             .join("\n");
+
+        // Save comparison result to history for each file
+        let mut history = load_history(&project_folder);
+        let comparison_summary = format!("【照合解析】対象: {}", file_names.join(", "));
+        for (i, path) in paths.iter().enumerate() {
+            let file_name = &file_names[i];
+            let entry = AnalysisHistoryEntry {
+                file_name: file_name.clone(),
+                file_path: path.clone(),
+                analyzed_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+                document_type: Some("照合解析".to_string()),
+                summary: comparison_summary.clone(),
+                issues: result.lines()
+                    .filter(|line| line.contains("⚠"))
+                    .map(|s| s.trim().to_string())
+                    .collect(),
+            };
+            history.entries.retain(|e| e.file_name != *file_name);
+            history.entries.push(entry);
+        }
+        if history.entries.len() > 50 {
+            history.entries = history.entries.split_off(history.entries.len() - 50);
+        }
+        let _ = save_history(&history);
+
         Ok(result)
     } else {
         Err(String::from_utf8_lossy(&output.stderr).to_string())
