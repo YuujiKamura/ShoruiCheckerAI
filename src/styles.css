@@ -185,6 +185,30 @@ button {
   accent-color: #00d9ff;
 }
 
+#pdf-list li.has-result .file-info {
+  cursor: pointer;
+}
+
+#pdf-list li.has-result .file-info:hover .filename {
+  color: #00d9ff;
+}
+
+#pdf-list li.has-error .file-info:hover .filename {
+  color: #ff9f43;
+}
+
+.status-icon {
+  margin-right: 6px;
+}
+
+#pdf-list li.has-result .status-icon {
+  color: #2ed573;
+}
+
+#pdf-list li.has-error .status-icon {
+  color: #ff4757;
+}
+
 #pdf-list li:last-child {
   border-bottom: none;
 }

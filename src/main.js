@@ -204,18 +204,40 @@ function updateList() {
 
   count.textContent = `(${pdfFiles.length})`;
 
-  list.innerHTML = pdfFiles.map((f, i) => `
-    <li>
+  list.innerHTML = pdfFiles.map((f, i) => {
+    const hasResult = f.result !== undefined;
+    const statusIcon = hasResult ? (f.resultError ? '⚠' : '✓') : '';
+    const statusClass = hasResult ? (f.resultError ? 'has-error' : 'has-result') : '';
+
+    return `
+    <li class="${statusClass}">
       <input type="checkbox" class="file-check" data-index="${i}" ${f.checked ? 'checked' : ''} onchange="toggleFile(${i})">
-      <div class="file-info">
-        <div class="filename">${escapeHtml(f.name)}</div>
+      <div class="file-info" onclick="showResult(${i})" style="cursor: ${hasResult ? 'pointer' : 'default'}">
+        <div class="filename">
+          ${statusIcon ? `<span class="status-icon">${statusIcon}</span>` : ''}
+          ${escapeHtml(f.name)}
+        </div>
         <div class="path">${escapeHtml(f.path)}</div>
       </div>
       <button class="remove" onclick="removeFile(${i})">✕</button>
     </li>
-  `).join("");
+  `}).join("");
 
   updateButtons();
+}
+
+function showResult(index) {
+  const file = pdfFiles[index];
+  if (file.result === undefined) return;
+
+  const resultSection = document.getElementById("result-section");
+  const resultContent = document.getElementById("result-content");
+
+  resultContent.innerHTML = `<h3>📄 ${escapeHtml(file.name)}</h3><hr>` +
+    (file.resultError
+      ? `<p style="color: #ff4757;">⚠ ${escapeHtml(file.result)}</p>`
+      : markdownToHtml(file.result));
+  resultSection.hidden = false;
 }
 
 function toggleFile(index) {
@@ -290,7 +312,8 @@ function clearTerminal() {
 }
 
 async function analyze(mode = "individual") {
-  if (pdfFiles.length === 0) return;
+  const checkedFiles = getCheckedFiles();
+  if (checkedFiles.length === 0) return;
 
   const terminalSection = document.getElementById("terminal-section");
   const resultSection = document.getElementById("result-section");
@@ -314,24 +337,89 @@ async function analyze(mode = "individual") {
     appendLog(message, level);
   });
 
+  // Listen for per-file progress
+  const progressUnlisten = await listen("analysis-progress", (event) => {
+    const { file_name, completed, success } = event.payload;
+    // Find the file and update its status
+    const file = pdfFiles.find(f => f.name === file_name);
+    if (file) {
+      file.analyzing = !completed;
+      updateList();
+    }
+  });
+
   try {
-    const checkedFiles = getCheckedFiles();
     const paths = checkedFiles.map(f => f.path);
     const result = await invoke("analyze_pdfs", { paths, mode });
 
-    resultContent.innerHTML = markdownToHtml(result);
+    if (mode === "compare") {
+      // 照合モード: 全ファイルに同じ結果を紐付け
+      checkedFiles.forEach(f => {
+        const file = pdfFiles.find(pf => pf.path === f.path);
+        if (file) {
+          file.result = result;
+          file.resultError = false;
+          file.compareMode = true;
+        }
+      });
+      resultContent.innerHTML = markdownToHtml(result);
+    } else {
+      // 個別モード: ファイルごとに結果をパース
+      const fileResults = parseIndividualResults(result);
+      checkedFiles.forEach(f => {
+        const file = pdfFiles.find(pf => pf.path === f.path);
+        if (file) {
+          const fileResult = fileResults[file.name];
+          if (fileResult) {
+            file.result = fileResult;
+            file.resultError = false;
+          }
+        }
+      });
+      resultContent.innerHTML = markdownToHtml(result);
+    }
+
     resultSection.hidden = false;
+    updateList();
   } catch (e) {
     appendLog(`エラー: ${e.toString()}`, "error");
+    // エラー時も結果を記録
+    checkedFiles.forEach(f => {
+      const file = pdfFiles.find(pf => pf.path === f.path);
+      if (file) {
+        file.result = e.toString();
+        file.resultError = true;
+      }
+    });
     resultContent.innerHTML = `<p style="color: #ff4757;">エラー: ${escapeHtml(e.toString())}</p>`;
     resultSection.hidden = false;
+    updateList();
   } finally {
     updateButtons();
+    progressUnlisten();
     if (logUnlisten) {
       logUnlisten();
       logUnlisten = null;
     }
   }
+}
+
+// 個別解析結果をファイルごとにパース
+function parseIndividualResults(result) {
+  const fileResults = {};
+  const sections = result.split(/\n## 📄 /);
+
+  for (const section of sections) {
+    if (!section.trim()) continue;
+    const lines = section.split('\n');
+    const fileName = lines[0].trim();
+    const content = lines.slice(1).join('\n').replace(/^---\n/, '').trim();
+    if (fileName) {
+      fileResults[fileName] = content;
+    }
+  }
+
+  return fileResults;
 }
 
 function escapeHtml(text) {
@@ -372,3 +460,4 @@ function markdownToHtml(md) {
 // Global functions for onclick
 window.removeFile = removeFile;
 window.toggleFile = toggleFile;
+window.showResult = showResult;
