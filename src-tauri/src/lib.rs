@@ -264,15 +264,15 @@ fn analyze_single_pdf(path: &str, task_id: &str, model: &str) -> Result<String, 
         .map(|p| format!("{}\\npm\\gemini.cmd", p))
         .unwrap_or_else(|_| "gemini".to_string());
 
+    // Use relative filename since current_dir is temp_dir
     let ps_script = format!(
         r#"$OutputEncoding = [Console]::OutputEncoding = [Text.Encoding]::UTF8
-$prompt = Get-Content -Raw -Encoding UTF8 '{}'
+$prompt = Get-Content -Raw -Encoding UTF8 'prompt.txt'
 & '{}' -m {} -o text $prompt '{}'
 "#,
-        prompt_file.to_string_lossy().replace("'", "''"),
         gemini_path.replace("'", "''"),
         model,
-        dest_path.to_string_lossy().replace("'", "''")
+        file_name.replace("'", "''")
     );
 
     let script_file = temp_dir.join("run.ps1");
