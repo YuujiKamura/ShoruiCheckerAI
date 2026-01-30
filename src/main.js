@@ -128,13 +128,16 @@ window.addEventListener("DOMContentLoaded", async () => {
   });
 
   // Tauri file drop event
-  await listen("tauri://drag-drop", (event) => {
+  await listen("tauri://drag-drop", async (event) => {
     const paths = event.payload.paths || [];
     for (const path of paths) {
       if (path.toLowerCase().endsWith(".pdf")) {
         const name = path.split(/[\\/]/).pop();
         if (!pdfFiles.find(f => f.path === path)) {
-          pdfFiles.push({ name, path, checked: true });
+          const file = { name, path, checked: true };
+          // Check for embedded result in PDF
+          await loadEmbeddedResult(file);
+          pdfFiles.push(file);
         }
       }
     }
@@ -161,7 +164,10 @@ window.addEventListener("DOMContentLoaded", async () => {
         for (const path of paths) {
           const name = path.split(/[\\/]/).pop();
           if (!pdfFiles.find(f => f.path === path)) {
-            pdfFiles.push({ name, path, checked: true });
+            const file = { name, path, checked: true };
+            // Check for embedded result in PDF
+            await loadEmbeddedResult(file);
+            pdfFiles.push(file);
           }
         }
         updateList();
@@ -229,6 +235,7 @@ function updateList() {
     const statusClass = hasResult ? (f.resultError ? 'has-error' : 'has-result') : '';
     const dateInfo = f.analyzedAt ? `<span class="analyzed-date">${f.analyzedAt}</span>` : '';
     const typeInfo = f.documentType ? `<span class="doc-type">[${f.documentType}]</span>` : '';
+    const embeddedIcon = f.embedded ? '<span class="embedded-icon" title="PDF内に結果埋め込み済み">📎</span>' : '';
 
     return `
     <li class="${statusClass}">
@@ -236,6 +243,7 @@ function updateList() {
       <div class="file-info" onclick="showResult(${i})" style="cursor: ${hasResult ? 'pointer' : 'default'}">
         <div class="filename">
           ${statusIcon ? `<span class="status-icon">${statusIcon}</span>` : ''}
+          ${embeddedIcon}
           ${escapeHtml(f.name)}
           ${typeInfo}
         </div>
@@ -399,6 +407,7 @@ async function analyze(mode = "individual") {
             file.result = fileResult;
             file.resultError = false;
             file.analyzedAt = now;
+            file.embedded = true; // Result is embedded in PDF by backend
           }
         }
       });
@@ -446,6 +455,22 @@ function parseIndividualResults(result) {
   }
 
   return fileResults;
+}
+
+// Load embedded analysis result from PDF metadata
+async function loadEmbeddedResult(file) {
+  try {
+    const embedded = await invoke("read_pdf_result", { path: file.path });
+    if (embedded) {
+      const [result, date] = embedded;
+      file.result = result;
+      file.resultError = false;
+      file.analyzedAt = date;
+      file.embedded = true; // Mark as loaded from PDF
+    }
+  } catch (e) {
+    // Ignore - PDF doesn't have embedded result
+  }
 }
 
 function escapeHtml(text) {

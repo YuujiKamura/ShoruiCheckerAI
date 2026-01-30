@@ -23,3 +23,4 @@ notify = { version = "6", features = ["serde"] }
 tokio = { version = "1", features = ["sync"] }
 dirs = "5"
 chrono = "0.4"
+lopdf = "0.34"

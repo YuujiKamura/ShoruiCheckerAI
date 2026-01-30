@@ -236,6 +236,11 @@ button {
   margin-left: 8px;
 }
 
+.file-info .embedded-icon {
+  margin-right: 4px;
+  font-size: 0.8rem;
+}
+
 #pdf-list .remove {
   color: #666;
   cursor: pointer;
