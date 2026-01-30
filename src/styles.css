@@ -241,6 +241,72 @@ button {
   font-size: 0.8rem;
 }
 
+/* Custom instruction section */
+.custom-instruction {
+  margin-top: 16px;
+  background: #16213e;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.instruction-header {
+  padding: 12px 16px;
+  cursor: pointer;
+  color: #888;
+  font-size: 0.9rem;
+  transition: color 0.2s;
+  user-select: none;
+}
+
+.instruction-header:hover {
+  color: #00d9ff;
+}
+
+.instruction-header.open span {
+  display: inline-block;
+}
+
+.instruction-header.open span::first-letter {
+  display: inline-block;
+  transform: rotate(90deg);
+}
+
+.instruction-body {
+  padding: 0 16px 16px;
+}
+
+.instruction-body:not([hidden]) {
+  display: block;
+}
+
+#custom-instruction {
+  width: 100%;
+  min-height: 80px;
+  padding: 12px;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  color: #eee;
+  font-size: 0.85rem;
+  font-family: inherit;
+  resize: vertical;
+}
+
+#custom-instruction:focus {
+  outline: none;
+  border-color: #00d9ff;
+}
+
+#custom-instruction::placeholder {
+  color: #555;
+}
+
+.instruction-hint {
+  font-size: 0.75rem;
+  color: #666;
+  margin-top: 8px;
+}
+
 #pdf-list .remove {
   color: #666;
   cursor: pointer;

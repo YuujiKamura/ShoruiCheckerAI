@@ -507,7 +507,7 @@ fn start_watcher(app: AppHandle, folder: &str) -> Result<(), String> {
 }
 
 /// 単一PDFを解析する内部関数
-fn analyze_single_pdf(path: &str, task_id: &str, model: &str) -> Result<String, String> {
+fn analyze_single_pdf(path: &str, task_id: &str, model: &str, custom_instruction: &str) -> Result<String, String> {
     let pdf_path = Path::new(path);
     let file_name = pdf_path.file_name()
         .map(|s| s.to_string_lossy().to_string())
@@ -522,6 +522,13 @@ fn analyze_single_pdf(path: &str, task_id: &str, model: &str) -> Result<String, 
     let history = load_history(&project_folder);
     let history_context = build_history_context(&history);
 
+    // Build custom instruction section
+    let custom_section = if custom_instruction.is_empty() {
+        String::new()
+    } else {
+        format!("\n## ユーザー指定のチェック項目\n以下の項目も必ず確認してください：\n{}\n", custom_instruction)
+    };
+
     // Create temp directory for this task
     let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     let temp_dir = home_dir.join(format!(".shoruichecker_temp_{}", task_id));
@@ -531,7 +538,7 @@ fn analyze_single_pdf(path: &str, task_id: &str, model: &str) -> Result<String, 
     let dest_path = temp_dir.join(&file_name);
     fs::copy(path, &dest_path).map_err(|e| format!("ファイルコピーエラー: {}", e))?;
 
-    // Build prompt with history context
+    // Build prompt with history context and custom instruction
     let prompt = format!(
         r#"あなたは日本語で回答するアシスタントです。必ず日本語で回答してください。
 
@@ -557,7 +564,7 @@ fn analyze_single_pdf(path: &str, task_id: &str, model: &str) -> Result<String, 
 
 ### 測量図面の場合
 - 縦断図と横断図の計画高・地盤高の照合
-
+{}
 ## 出力形式
 - まず書類タイプを判定して報告
 - 整合している項目は「✓」で示す
@@ -565,6 +572,7 @@ fn analyze_single_pdf(path: &str, task_id: &str, model: &str) -> Result<String, 
 - 過去の解析履歴がある場合、それとの整合性も確認すること
 {}
 ファイル: {}"#,
+        custom_section,
         history_context,
         file_name
     );
@@ -636,7 +644,7 @@ struct AnalysisResult {
 }
 
 /// 複数PDFをまとめて照合解析
-fn analyze_compare_pdfs(paths: &[String], model: &str) -> Result<String, String> {
+fn analyze_compare_pdfs(paths: &[String], model: &str, custom_instruction: &str) -> Result<String, String> {
     let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     let temp_dir = home_dir.join(".shoruichecker_temp_compare");
     fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
@@ -650,6 +658,13 @@ fn analyze_compare_pdfs(paths: &[String], model: &str) -> Result<String, String>
     // Load history
     let history = load_history(&project_folder);
     let history_context = build_history_context(&history);
+
+    // Build custom instruction section
+    let custom_section = if custom_instruction.is_empty() {
+        String::new()
+    } else {
+        format!("\n## ユーザー指定のチェック項目\n以下の項目も必ず確認してください：\n{}\n", custom_instruction)
+    };
 
     // Copy all PDFs
     let mut copied_files: Vec<String> = Vec::new();
@@ -666,7 +681,7 @@ fn analyze_compare_pdfs(paths: &[String], model: &str) -> Result<String, String>
         copied_files.push(dest_path.to_string_lossy().to_string());
     }
 
-    // Build comparison prompt with history
+    // Build comparison prompt with history and custom instruction
     let prompt = format!(
         r#"あなたは日本語で回答するアシスタントです。必ず日本語で回答してください。
 
@@ -682,7 +697,7 @@ fn analyze_compare_pdfs(paths: &[String], model: &str) -> Result<String, String>
 - 数量・単価の整合性
 - 印影・署名の有無
 - 過去の解析履歴との整合性
-
+{}
 ## 出力形式
 1. 各書類の概要を簡潔に説明
 2. 書類間で整合している項目は「✓」で示す
@@ -690,6 +705,7 @@ fn analyze_compare_pdfs(paths: &[String], model: &str) -> Result<String, String>
 4. 総合判定（整合/要確認/不整合）
 {}"#,
         file_names.join("\n"),
+        custom_section,
         history_context
     );
 
@@ -770,13 +786,14 @@ Get-Content -Raw -Encoding UTF8 'prompt.txt' | & '{}' -m {} -o text $pdfs
 
 /// PDFを解析 (Gemini CLI使用)
 #[tauri::command]
-async fn analyze_pdfs(app: AppHandle, paths: Vec<String>, mode: String) -> Result<String, String> {
+async fn analyze_pdfs(app: AppHandle, paths: Vec<String>, mode: String, custom_instruction: Option<String>) -> Result<String, String> {
     if paths.is_empty() {
         return Err("ファイルが指定されていません".to_string());
     }
 
     let total = paths.len();
     let model = load_settings().model.unwrap_or_else(|| DEFAULT_MODEL.to_string());
+    let custom = custom_instruction.unwrap_or_default();
 
     // 照合モード
     if mode == "compare" {
@@ -787,9 +804,12 @@ async fn analyze_pdfs(app: AppHandle, paths: Vec<String>, mode: String) -> Resul
                 .unwrap_or_else(|| "unknown.pdf".to_string());
             emit_log(&app, &format!("  - {}", file_name), "info");
         }
+        if !custom.is_empty() {
+            emit_log(&app, &format!("カスタム指示: {}", custom.lines().next().unwrap_or("")), "info");
+        }
         emit_log(&app, &format!("{} で照合中...", model), "wave");
 
-        match analyze_compare_pdfs(&paths, &model) {
+        match analyze_compare_pdfs(&paths, &model, &custom) {
             Ok(result) => {
                 emit_log(&app, "✓ 照合完了", "success");
                 Ok(result)
@@ -803,6 +823,9 @@ async fn analyze_pdfs(app: AppHandle, paths: Vec<String>, mode: String) -> Resul
     // 個別モード
     else {
         emit_log(&app, &format!("=== PDF個別解析開始 ({} ファイル) ===", total), "info");
+        if !custom.is_empty() {
+            emit_log(&app, &format!("カスタム指示: {}", custom.lines().next().unwrap_or("")), "info");
+        }
 
         if total == 1 {
             let path = &paths[0];
@@ -812,7 +835,7 @@ async fn analyze_pdfs(app: AppHandle, paths: Vec<String>, mode: String) -> Resul
 
             emit_log(&app, &format!("{} を解析中...", file_name), "wave");
 
-            match analyze_single_pdf(path, "single", &model) {
+            match analyze_single_pdf(path, "single", &model, &custom) {
                 Ok(result) => {
                     emit_log(&app, "✓ 解析完了", "success");
                     Ok(result)
@@ -829,6 +852,7 @@ async fn analyze_pdfs(app: AppHandle, paths: Vec<String>, mode: String) -> Resul
 
             for (i, path) in paths.into_iter().enumerate() {
                 let model_clone = model.clone();
+                let custom_clone = custom.clone();
                 let task_id = format!("task_{}", i);
                 let app_clone = app.clone();
                 let file_name = Path::new(&path).file_name()
@@ -836,7 +860,7 @@ async fn analyze_pdfs(app: AppHandle, paths: Vec<String>, mode: String) -> Resul
                     .unwrap_or_else(|| format!("file_{}.pdf", i));
 
                 let handle = thread::spawn(move || {
-                    let result = analyze_single_pdf(&path, &task_id, &model_clone);
+                    let result = analyze_single_pdf(&path, &task_id, &model_clone, &custom_clone);
                     let _ = app_clone.emit("analysis-progress", serde_json::json!({
                         "file_name": file_name.clone(),
                         "completed": true,

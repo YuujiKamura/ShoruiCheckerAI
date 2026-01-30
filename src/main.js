@@ -187,6 +187,15 @@ window.addEventListener("DOMContentLoaded", async () => {
   clearBtn.addEventListener("click", clearFiles);
   selectAllBtn.addEventListener("click", selectAll);
   selectNoneBtn.addEventListener("click", selectNone);
+
+  // Custom instruction toggle
+  const instructionToggle = document.getElementById("instruction-toggle");
+  const instructionBody = document.getElementById("instruction-body");
+  instructionToggle.addEventListener("click", () => {
+    const isHidden = instructionBody.hidden;
+    instructionBody.hidden = !isHidden;
+    instructionToggle.querySelector("span").textContent = isHidden ? "▼ カスタム指示" : "▶ カスタム指示";
+  });
 });
 
 async function checkAuthStatus() {
@@ -380,7 +389,8 @@ async function analyze(mode = "individual") {
 
   try {
     const paths = checkedFiles.map(f => f.path);
-    const result = await invoke("analyze_pdfs", { paths, mode });
+    const customInstruction = document.getElementById("custom-instruction").value.trim();
+    const result = await invoke("analyze_pdfs", { paths, mode, customInstruction });
 
     const now = new Date().toLocaleString('ja-JP');
     if (mode === "compare") {
