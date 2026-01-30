@@ -4,97 +4,105 @@
     <meta charset="UTF-8" />
     <link rel="stylesheet" href="styles.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>書類チェッカー</title>
+    <title>PDF整合性チェッカー</title>
     <script type="module" src="/main.js" defer></script>
   </head>
 
   <body>
     <div class="app">
       <header>
-        <h1>📄 書類チェッカー</h1>
-        <span id="cli-status"></span>
+        <h1>PDF整合性チェッカー</h1>
+        <button id="settings-btn" class="icon-btn" title="設定">⚙</button>
       </header>
 
+      <!-- Settings Modal -->
+      <div id="settings-modal" class="modal" hidden>
+        <div class="modal-content">
+          <div class="modal-header">
+            <h2>設定</h2>
+            <button id="close-settings" class="close-btn">×</button>
+          </div>
+          <div class="modal-body">
+            <div class="setting-item">
+              <label>監視フォルダ</label>
+              <div class="folder-input">
+                <input type="text" id="watch-folder" readonly placeholder="フォルダを選択...">
+                <button id="select-folder-btn">選択</button>
+              </div>
+              <p class="setting-desc">サブフォルダ含め、PDFが追加されると通知します</p>
+            </div>
+            <div class="setting-status" id="watch-status"></div>
+
+            <div class="setting-divider"></div>
+
+            <div class="setting-item">
+              <label>モデル</label>
+              <select id="model-select">
+                <option value="gemini-2.5-pro">Gemini 2.5 Pro (書類解析対応)</option>
+              </select>
+              <p class="setting-desc">※Flash系は書類OCRに非対応</p>
+            </div>
+
+            <div class="setting-divider"></div>
+
+            <div class="setting-item">
+              <label>Gemini CLI 認証</label>
+              <div class="auth-row">
+                <span id="auth-status" class="auth-status">確認中...</span>
+                <button id="auth-btn">認証する</button>
+              </div>
+              <p class="setting-desc">初回または認証切れ時に実行してください</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <main>
-        <!-- 監視設定 -->
-        <section class="controls">
-          <div class="control-group">
-            <label>監視フォルダ:</label>
-            <input type="text" id="folder-path" placeholder="C:\Documents\工事書類" />
-            <button id="browse-btn">📁</button>
-            <button id="start-btn">監視開始</button>
-            <button id="stop-btn" disabled>監視停止</button>
-          </div>
-          <div class="status-bar">
-            <span id="watch-status">⏸️ 待機中</span>
-          </div>
+        <section class="drop-zone" id="drop-zone">
+          <p>PDFをドラッグ&ドロップ</p>
+          <p class="sub">または クリックして選択</p>
         </section>
 
-        <!-- 検出されたファイル -->
-        <section class="pending-section">
-          <div class="section-header">
-            <h2>📥 検出ファイル <span id="pending-count">(0)</span></h2>
-            <button id="clear-pending-btn" class="small-btn">クリア</button>
+        <section class="file-list">
+          <div class="list-header">
+            <h2>ファイル一覧 <span id="file-count">(0)</span></h2>
+            <div class="buttons">
+              <button id="analyze-btn" disabled>解析</button>
+              <button id="clear-btn">クリア</button>
+            </div>
           </div>
-          <div id="pending-list" class="file-list">
-            <p class="placeholder">新しいPDFがここに表示されます</p>
-          </div>
+          <ul id="pdf-list"></ul>
         </section>
 
-        <!-- チェック履歴 -->
-        <section class="results">
-          <h2>📋 チェック履歴</h2>
-          <div id="results-list" class="results-list">
-            <p class="placeholder">チェック結果がここに表示されます</p>
+        <section class="terminal" id="terminal-section" hidden>
+          <div class="terminal-header">
+            <span class="terminal-title">Terminal</span>
           </div>
+          <div class="terminal-body" id="terminal-output"></div>
+        </section>
+
+        <section class="result" id="result-section" hidden>
+          <h2>解析結果</h2>
+          <div id="result-content"></div>
         </section>
       </main>
 
-      <footer>
-        <button id="edit-policy-btn">⚙️ 自動解析ポリシー</button>
-        <button id="edit-guidelines-btn">📝 ガイドライン</button>
-      </footer>
+      <div id="loading" hidden>
+        <div class="spinner"></div>
+        <p>解析中...</p>
+      </div>
+    </div>
 
-      <!-- ポリシー編集ダイアログ -->
-      <dialog id="policy-dialog">
-        <h3>自動解析ポリシー</h3>
-        <div class="form-group">
-          <label>
-            <input type="checkbox" id="policy-auto" />
-            自動解析を有効にする
-          </label>
+    <!-- Notification Toast (outside .app for proper positioning) -->
+    <div id="notification-toast" class="toast" hidden>
+      <div class="toast-content">
+        <div class="toast-icon">📄</div>
+        <div class="toast-text">
+          <div class="toast-title">PDF追加</div>
+          <div class="toast-body" id="toast-body"></div>
         </div>
-        <div class="form-group">
-          <label>対象パターン (カンマ区切り):</label>
-          <input type="text" id="policy-include" placeholder="材料,品質,出来形" />
-          <small>空欄の場合は全てのPDFが対象</small>
-        </div>
-        <div class="form-group">
-          <label>除外パターン (カンマ区切り):</label>
-          <input type="text" id="policy-exclude" placeholder="test,draft,下書き" />
-        </div>
-        <div class="form-group">
-          <label>ファイルサイズ:</label>
-          <div class="size-inputs">
-            <input type="number" id="policy-min-size" placeholder="1" /> KB 〜
-            <input type="number" id="policy-max-size" placeholder="50000" /> KB
-          </div>
-        </div>
-        <div class="dialog-buttons">
-          <button id="save-policy-btn">保存</button>
-          <button id="close-policy-btn">閉じる</button>
-        </div>
-      </dialog>
-
-      <!-- ガイドライン編集ダイアログ -->
-      <dialog id="guidelines-dialog">
-        <h3>検証ガイドライン</h3>
-        <textarea id="guidelines-text" placeholder="検証時に参照するガイドラインを記述..."></textarea>
-        <div class="dialog-buttons">
-          <button id="save-guidelines-btn">保存</button>
-          <button id="close-guidelines-btn">閉じる</button>
-        </div>
-      </dialog>
+        <button id="toast-close" class="toast-close">×</button>
+      </div>
     </div>
   </body>
 </html>

@@ -22,3 +22,13 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Build artifacts
+src-tauri/target/
+
+# Poppler binaries
+poppler-*/
+poppler.zip
+
+# Package lock (optional)
+package-lock.json
