@@ -153,7 +153,9 @@ window.addEventListener("DOMContentLoaded", async () => {
   });
 
   // Button events
-  analyzeBtn.addEventListener("click", analyze);
+  const compareBtn = document.getElementById("compare-btn");
+  analyzeBtn.addEventListener("click", () => analyze("individual"));
+  compareBtn.addEventListener("click", () => analyze("compare"));
   clearBtn.addEventListener("click", clearFiles);
 });
 
@@ -195,9 +197,11 @@ function updateList() {
   const list = document.getElementById("pdf-list");
   const count = document.getElementById("file-count");
   const analyzeBtn = document.getElementById("analyze-btn");
+  const compareBtn = document.getElementById("compare-btn");
 
   count.textContent = `(${pdfFiles.length})`;
   analyzeBtn.disabled = pdfFiles.length === 0;
+  compareBtn.disabled = pdfFiles.length < 2; // 照合は2ファイル以上必要
 
   list.innerHTML = pdfFiles.map((f, i) => `
     <li>
@@ -253,19 +257,21 @@ function clearTerminal() {
   terminal.innerHTML = "";
 }
 
-async function analyze() {
+async function analyze(mode = "individual") {
   if (pdfFiles.length === 0) return;
 
   const terminalSection = document.getElementById("terminal-section");
   const resultSection = document.getElementById("result-section");
   const resultContent = document.getElementById("result-content");
   const analyzeBtn = document.getElementById("analyze-btn");
+  const compareBtn = document.getElementById("compare-btn");
 
   // Show terminal, hide result
   terminalSection.hidden = false;
   resultSection.hidden = true;
   clearTerminal();
   analyzeBtn.disabled = true;
+  compareBtn.disabled = true;
 
   // Listen for log events
   if (logUnlisten) {
@@ -278,7 +284,7 @@ async function analyze() {
 
   try {
     const paths = pdfFiles.map(f => f.path);
-    const result = await invoke("analyze_pdfs", { paths });
+    const result = await invoke("analyze_pdfs", { paths, mode });
 
     resultContent.innerHTML = markdownToHtml(result);
     resultSection.hidden = false;
@@ -288,6 +294,7 @@ async function analyze() {
     resultSection.hidden = false;
   } finally {
     analyzeBtn.disabled = pdfFiles.length === 0;
+    compareBtn.disabled = pdfFiles.length < 2;
     if (logUnlisten) {
       logUnlisten();
       logUnlisten = null;

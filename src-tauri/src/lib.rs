@@ -308,94 +308,211 @@ struct AnalysisResult {
     error: Option<String>,
 }
 
-/// PDFを並列解析 (Gemini CLI使用)
+/// 複数PDFをまとめて照合解析
+fn analyze_compare_pdfs(paths: &[String], model: &str) -> Result<String, String> {
+    let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let temp_dir = home_dir.join(".shoruichecker_temp_compare");
+    fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
+
+    // Copy all PDFs
+    let mut copied_files: Vec<String> = Vec::new();
+    let mut file_names: Vec<String> = Vec::new();
+    for (i, path) in paths.iter().enumerate() {
+        let pdf_path = Path::new(path);
+        let file_name = pdf_path.file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| format!("file_{}.pdf", i));
+        file_names.push(file_name.clone());
+
+        let dest_path = temp_dir.join(&file_name);
+        fs::copy(path, &dest_path).map_err(|e| format!("ファイルコピーエラー: {}", e))?;
+        copied_files.push(dest_path.to_string_lossy().to_string());
+    }
+
+    // Build comparison prompt
+    let prompt = format!(
+        r#"あなたは日本語で回答するアシスタントです。必ず日本語で回答してください。
+
+添付の複数PDF書類を照合し、書類間の整合性をチェックしてください。
+
+## 照合対象ファイル
+{}
+
+## チェックポイント
+- 書類間で当事者名（発注者・受注者・会社名）が一致しているか
+- 金額が書類間で整合しているか（見積書と契約書の金額一致等）
+- 日付の整合性（契約日、工期、納期等）
+- 数量・単価の整合性
+- 印影・署名の有無
+
+## 出力形式
+1. 各書類の概要を簡潔に説明
+2. 書類間で整合している項目は「✓」で示す
+3. 不整合や矛盾がある項目は「⚠」で具体的に指摘
+4. 総合判定（整合/要確認/不整合）"#,
+        file_names.join("\n")
+    );
+
+    let prompt_file = temp_dir.join("prompt.txt");
+    fs::write(&prompt_file, &prompt).map_err(|e| e.to_string())?;
+
+    let gemini_path = std::env::var("APPDATA")
+        .map(|p| format!("{}\\npm\\gemini.cmd", p))
+        .unwrap_or_else(|_| "gemini".to_string());
+
+    let pdf_array = copied_files.iter()
+        .map(|p| format!("    '{}'", p.replace("'", "''")))
+        .collect::<Vec<_>>()
+        .join(",\n");
+
+    let ps_script = format!(
+        r#"$OutputEncoding = [Console]::OutputEncoding = [Text.Encoding]::UTF8
+$prompt = Get-Content -Raw -Encoding UTF8 '{}'
+$pdfs = @(
+{}
+)
+& '{}' -m {} -o text $prompt $pdfs
+"#,
+        prompt_file.to_string_lossy().replace("'", "''"),
+        pdf_array,
+        gemini_path.replace("'", "''"),
+        model
+    );
+
+    let script_file = temp_dir.join("run.ps1");
+    fs::write(&script_file, &ps_script).map_err(|e| e.to_string())?;
+
+    let mut cmd = Command::new("powershell");
+    cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", &script_file.to_string_lossy()])
+        .current_dir(&temp_dir);
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+
+    let output = cmd.output().map_err(|e| e.to_string())?;
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    if output.status.success() {
+        let result = String::from_utf8_lossy(&output.stdout).to_string();
+        let result = result.lines()
+            .filter(|line| !line.contains("Loaded cached credentials") && !line.contains("Hook registry initialized"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        Ok(result)
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    }
+}
+
+/// PDFを解析 (Gemini CLI使用)
 #[tauri::command]
-async fn analyze_pdfs(app: AppHandle, paths: Vec<String>) -> Result<String, String> {
+async fn analyze_pdfs(app: AppHandle, paths: Vec<String>, mode: String) -> Result<String, String> {
     if paths.is_empty() {
         return Err("ファイルが指定されていません".to_string());
     }
 
     let total = paths.len();
-    emit_log(&app, &format!("=== PDF整合性チェック開始 ({} ファイル) ===", total), "info");
-
-    // Get model setting
     let model = load_settings().model.unwrap_or_else(|| DEFAULT_MODEL.to_string());
 
-    if total == 1 {
-        // Single file - simple execution
-        let path = &paths[0];
-        let file_name = Path::new(path).file_name()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| "unknown.pdf".to_string());
+    // 照合モード
+    if mode == "compare" {
+        emit_log(&app, &format!("=== PDF照合解析開始 ({} ファイル) ===", total), "info");
+        for path in &paths {
+            let file_name = Path::new(path).file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "unknown.pdf".to_string());
+            emit_log(&app, &format!("  - {}", file_name), "info");
+        }
+        emit_log(&app, &format!("{} で照合中...", model), "wave");
 
-        emit_log(&app, &format!("{} を解析中...", file_name), "wave");
-
-        match analyze_single_pdf(path, "single", &model) {
+        match analyze_compare_pdfs(&paths, &model) {
             Ok(result) => {
-                emit_log(&app, "✓ 解析完了", "success");
+                emit_log(&app, "✓ 照合完了", "success");
                 Ok(result)
             }
             Err(e) => {
-                emit_log(&app, &format!("解析エラー: {}", e), "error");
+                emit_log(&app, &format!("照合エラー: {}", e), "error");
                 Err(e)
             }
         }
-    } else {
-        // Multiple files - parallel execution
-        emit_log(&app, &format!("{} で {} ファイルを並列解析中...", model, total), "wave");
+    }
+    // 個別モード
+    else {
+        emit_log(&app, &format!("=== PDF個別解析開始 ({} ファイル) ===", total), "info");
 
-        let mut handles = vec![];
-
-        for (i, path) in paths.into_iter().enumerate() {
-            let model_clone = model.clone();
-            let task_id = format!("task_{}", i);
-            let app_clone = app.clone();
-            let file_name = Path::new(&path).file_name()
+        if total == 1 {
+            let path = &paths[0];
+            let file_name = Path::new(path).file_name()
                 .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_else(|| format!("file_{}.pdf", i));
+                .unwrap_or_else(|| "unknown.pdf".to_string());
 
-            let handle = thread::spawn(move || {
-                let result = analyze_single_pdf(&path, &task_id, &model_clone);
-                let _ = app_clone.emit("analysis-progress", serde_json::json!({
-                    "file_name": file_name.clone(),
-                    "completed": true,
-                    "success": result.is_ok()
-                }));
-                AnalysisResult {
-                    file_name,
-                    path,
-                    result: result.clone().ok(),
-                    error: result.err(),
+            emit_log(&app, &format!("{} を解析中...", file_name), "wave");
+
+            match analyze_single_pdf(path, "single", &model) {
+                Ok(result) => {
+                    emit_log(&app, "✓ 解析完了", "success");
+                    Ok(result)
                 }
-            });
-            handles.push(handle);
-        }
-
-        // Collect results
-        let mut results: Vec<AnalysisResult> = vec![];
-        for handle in handles {
-            if let Ok(result) = handle.join() {
-                results.push(result);
+                Err(e) => {
+                    emit_log(&app, &format!("解析エラー: {}", e), "error");
+                    Err(e)
+                }
             }
-        }
+        } else {
+            emit_log(&app, &format!("{} で {} ファイルを並列解析中...", model, total), "wave");
 
-        // Format combined results
-        let mut output = String::new();
-        let success_count = results.iter().filter(|r| r.result.is_some()).count();
+            let mut handles = vec![];
 
-        for r in &results {
-            output.push_str(&format!("\n## 📄 {}\n", r.file_name));
-            output.push_str("---\n");
-            if let Some(ref res) = r.result {
-                output.push_str(res);
-            } else if let Some(ref err) = r.error {
-                output.push_str(&format!("⚠ エラー: {}", err));
+            for (i, path) in paths.into_iter().enumerate() {
+                let model_clone = model.clone();
+                let task_id = format!("task_{}", i);
+                let app_clone = app.clone();
+                let file_name = Path::new(&path).file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| format!("file_{}.pdf", i));
+
+                let handle = thread::spawn(move || {
+                    let result = analyze_single_pdf(&path, &task_id, &model_clone);
+                    let _ = app_clone.emit("analysis-progress", serde_json::json!({
+                        "file_name": file_name.clone(),
+                        "completed": true,
+                        "success": result.is_ok()
+                    }));
+                    AnalysisResult {
+                        file_name,
+                        path,
+                        result: result.clone().ok(),
+                        error: result.err(),
+                    }
+                });
+                handles.push(handle);
             }
-            output.push_str("\n\n");
-        }
 
-        emit_log(&app, &format!("✓ 解析完了 ({}/{})", success_count, total), "success");
-        Ok(output)
+            // Collect results
+            let mut results: Vec<AnalysisResult> = vec![];
+            for handle in handles {
+                if let Ok(result) = handle.join() {
+                    results.push(result);
+                }
+            }
+
+            // Format combined results
+            let mut output = String::new();
+            let success_count = results.iter().filter(|r| r.result.is_some()).count();
+
+            for r in &results {
+                output.push_str(&format!("\n## 📄 {}\n", r.file_name));
+                output.push_str("---\n");
+                if let Some(ref res) = r.result {
+                    output.push_str(res);
+                } else if let Some(ref err) = r.error {
+                    output.push_str(&format!("⚠ エラー: {}", err));
+                }
+                output.push_str("\n\n");
+            }
+
+            emit_log(&app, &format!("✓ 解析完了 ({}/{})", success_count, total), "success");
+            Ok(output)
+        }
     }
 }
 
