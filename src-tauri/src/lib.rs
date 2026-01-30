@@ -2,6 +2,11 @@ use std::process::Command;
 use std::path::{Path, PathBuf};
 use std::fs;
 use std::sync::{Arc, Mutex};
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri::tray::{TrayIconBuilder, MouseButton, MouseButtonState, TrayIconEvent};
 use tauri::menu::{Menu, MenuItem};
@@ -128,10 +133,11 @@ fn check_gemini_auth() -> Result<bool, String> {
         .unwrap_or_else(|_| "gemini".to_string());
 
     // Try running gemini with a simple command
-    let output = Command::new("powershell")
-        .args(["-NoProfile", "-Command", &format!("& '{}' --version", gemini_path)])
-        .output()
-        .map_err(|e| format!("確認エラー: {}", e))?;
+    let mut cmd = Command::new("powershell");
+    cmd.args(["-NoProfile", "-Command", &format!("& '{}' --version", gemini_path)]);
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let output = cmd.output().map_err(|e| format!("確認エラー: {}", e))?;
 
     // If it succeeds, we're authenticated
     Ok(output.status.success())
@@ -305,14 +311,15 @@ $pdfs = @(
 
     fs::write(&script_file, &ps_script).map_err(|e| format!("スクリプト書き込みエラー: {}", e))?;
 
-    let output = Command::new("powershell")
-        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", &script_file.to_string_lossy()])
-        .current_dir(&temp_dir)
-        .output()
-        .map_err(|e| {
-            emit_log(&app, &format!("Gemini CLI実行エラー: {}", e), "error");
-            format!("Gemini CLI実行エラー: {}", e)
-        })?;
+    let mut cmd = Command::new("powershell");
+    cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", &script_file.to_string_lossy()])
+        .current_dir(&temp_dir);
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let output = cmd.output().map_err(|e| {
+        emit_log(&app, &format!("Gemini CLI実行エラー: {}", e), "error");
+        format!("Gemini CLI実行エラー: {}", e)
+    })?;
 
     // Cleanup temp directory
     let _ = fs::remove_dir_all(&temp_dir);
