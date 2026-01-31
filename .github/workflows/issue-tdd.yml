@@ -1,0 +1,39 @@
+name: TDD Issue Auto Comment
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+
+jobs:
+  comment:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add TDD guidance comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            if (!issue || issue.pull_request) return;
+
+            const hasTddLabel = (issue.labels || []).some(label => label.name === 'tdd');
+            if (!hasTddLabel) return;
+
+            const body = [
+              'TDDガイド: 先にテストを作成してください。',
+              '',
+              '1. Issue本文を `issue.md` として保存',
+              '2. `npm run tdd:issue -- issue.md` を実行',
+              '3. `npm run test` を実行',
+              '',
+              'Issueテンプレに沿って「先に書くテスト」を必ず作成してください。'
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              body
+            });
