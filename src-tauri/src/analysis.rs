@@ -62,7 +62,8 @@ fn analyze_single_pdf(
     };
 
     // Create temp directory for this task
-    let temp_dir = create_temp_dir(&format!(".shoruichecker_temp_{}", task_id))?;
+    let temp_dir = create_temp_dir(&format!(".shoruichecker_temp_{}", task_id))
+        .map_err(|e| e.to_string())?;
 
     // Copy PDF to temp directory
     let dest_path = temp_dir.join(&file_name);
@@ -131,13 +132,14 @@ fn analyze_single_pdf(
 
             Ok(result)
         }
-        Err(error) => Err(error),
+        Err(error) => Err(error.to_string()),
     }
 }
 
 /// 複数PDFをまとめて照合解析
 fn analyze_compare_pdfs(paths: &[String], model: &str, custom_instruction: &str) -> Result<String, String> {
-    let temp_dir = create_temp_dir(".shoruichecker_temp_compare")?;
+    let temp_dir = create_temp_dir(".shoruichecker_temp_compare")
+        .map_err(|e| e.to_string())?;
 
     // Get project folder from first file
     let project_folder = paths
@@ -278,7 +280,7 @@ fn analyze_compare_pdfs(paths: &[String], model: &str, custom_instruction: &str)
 
             Ok(result)
         }
-        Err(error) => Err(error),
+        Err(error) => Err(error.to_string()),
     }
 }
 

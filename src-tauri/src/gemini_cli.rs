@@ -2,12 +2,18 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
 #[cfg(target_os = "windows")]
 use crate::CREATE_NO_WINDOW;
+
+use crate::error::{AppError, AppResult};
+
+static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 pub fn gemini_cmd_path() -> String {
     std::env::var("APPDATA")
@@ -51,9 +57,9 @@ impl<'a> GeminiRequest<'a> {
     }
 }
 
-pub fn run_gemini(temp_dir: &Path, request: &GeminiRequest<'_>) -> Result<String, String> {
+pub fn run_gemini(temp_dir: &Path, request: &GeminiRequest<'_>) -> AppResult<String> {
     let prompt_file = temp_dir.join("prompt.txt");
-    fs::write(&prompt_file, request.prompt).map_err(|e| e.to_string())?;
+    fs::write(&prompt_file, request.prompt)?;
 
     let gemini_path = gemini_cmd_path();
     let ps_script = build_ps_script(&gemini_path, request);
@@ -73,7 +79,7 @@ pub fn run_gemini(temp_dir: &Path, request: &GeminiRequest<'_>) -> Result<String
     #[cfg(target_os = "windows")]
     cmd.creation_flags(CREATE_NO_WINDOW);
 
-    let output = cmd.output().map_err(|e| e.to_string())?;
+    let output = cmd.output().map_err(AppError::from)?;
     if output.status.success() {
         let result = String::from_utf8_lossy(&output.stdout).to_string();
         Ok(clean_gemini_output(&result))
@@ -90,11 +96,13 @@ pub fn run_gemini(temp_dir: &Path, request: &GeminiRequest<'_>) -> Result<String
         } else {
             format!("{}: {}\n{}", status, stderr, stdout)
         };
-        Err(detail.trim().to_string())
+        let detail = detail.trim().to_string();
+        write_error_log(temp_dir, &detail);
+        Err(AppError::Process(detail))
     }
 }
 
-pub fn run_gemini_in_temp(prefix: &str, request: &GeminiRequest<'_>) -> Result<String, String> {
+pub fn run_gemini_in_temp(prefix: &str, request: &GeminiRequest<'_>) -> AppResult<String> {
     let temp_dir = create_temp_dir(prefix)?;
     let result = run_gemini(&temp_dir, request);
     cleanup_temp_dir(&temp_dir);
@@ -106,7 +114,7 @@ pub fn run_gemini_with_prompt(
     prompt: &str,
     model: &str,
     pdfs: Option<&[String]>,
-) -> Result<String, String> {
+) -> AppResult<String> {
     let request = if let Some(files) = pdfs {
         GeminiRequest::text_with_files(prompt, model, files)
     } else {
@@ -115,10 +123,12 @@ pub fn run_gemini_with_prompt(
     run_gemini(temp_dir, &request)
 }
 
-pub fn create_temp_dir(prefix: &str) -> Result<PathBuf, String> {
+pub fn create_temp_dir(prefix: &str) -> AppResult<PathBuf> {
     let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    let temp_dir = home_dir.join(prefix);
-    fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
+    let unique = unique_suffix();
+    let dir_name = format!("{}-{}", prefix, unique);
+    let temp_dir = home_dir.join(dir_name);
+    fs::create_dir_all(&temp_dir)?;
     Ok(temp_dir)
 }
 
@@ -164,4 +174,18 @@ pub fn clean_gemini_output(output: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn unique_suffix() -> String {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{}-{}", millis, counter)
+}
+
+fn write_error_log(temp_dir: &Path, detail: &str) {
+    let log_path = temp_dir.join("gemini-error.log");
+    let _ = fs::write(log_path, detail);
 }

@@ -8,6 +8,7 @@ use tauri::Manager;
 mod analysis;
 mod code_review;
 mod events;
+mod error;
 mod gemini;
 mod gemini_cli;
 mod guidelines;

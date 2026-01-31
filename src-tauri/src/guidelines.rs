@@ -287,7 +287,7 @@ JSON形式のみ出力。説明文不要。
         }
         Err(error) => {
             emit_log(&app, &format!("エラー: {}", error), "error");
-            Err(error)
+            Err(error.to_string())
         }
     }
 }

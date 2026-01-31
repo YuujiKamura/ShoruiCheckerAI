@@ -174,6 +174,7 @@ fn review_code_change(file_path: &Path, content: &str, model: &str) -> Result<St
 
     let request = GeminiRequest::text(&prompt, model);
     run_gemini_in_temp(".shoruichecker_code_review_temp", &request)
+        .map_err(|e| e.to_string())
 }
 
 /// レビュー結果をログに追記（JSON Lines形式）
