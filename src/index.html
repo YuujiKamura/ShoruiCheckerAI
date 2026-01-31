@@ -36,6 +36,25 @@
             <div class="setting-divider"></div>
 
             <div class="setting-item">
+              <label>コード監視フォルダ</label>
+              <div class="folder-input">
+                <input type="text" id="code-watch-folder" readonly placeholder="フォルダを選択...">
+                <button id="select-code-folder-btn">選択</button>
+              </div>
+              <p class="setting-desc">コード変更をGeminiでバックグラウンドレビュー</p>
+            </div>
+            <div class="setting-item">
+              <label class="checkbox-label">
+                <input type="checkbox" id="code-review-enabled">
+                <span>コードレビューを有効化</span>
+              </label>
+              <p class="setting-desc">*.rs, *.ts, *.tsx, *.js, *.py の変更を監視</p>
+            </div>
+            <div class="setting-status" id="code-watch-status"></div>
+
+            <div class="setting-divider"></div>
+
+            <div class="setting-item">
               <label>モデル</label>
               <select id="model-select">
                 <option value="gemini-2.5-pro">Gemini 2.5 Pro (書類解析対応)</option>
@@ -80,6 +99,7 @@
           <div class="custom-instruction">
             <div class="instruction-header">
               <span>カスタム指示</span>
+              <button id="copy-instruction-btn" class="small-btn">コピー</button>
             </div>
             <div class="instruction-body">
               <textarea id="custom-instruction" placeholder="例：&#10;・契約金額が見積書と一致しているか確認&#10;・工期が前回の契約と重複していないか&#10;・下請け業者名が施工体制台帳と一致しているか"></textarea>
@@ -116,6 +136,18 @@
           <div class="toast-body" id="toast-body"></div>
         </div>
         <button id="toast-close" class="toast-close">×</button>
+      </div>
+    </div>
+
+    <!-- Code Review Toast -->
+    <div id="code-review-toast" class="toast code-review-toast" hidden>
+      <div class="toast-content">
+        <div class="toast-icon" id="code-review-icon">💻</div>
+        <div class="toast-text">
+          <div class="toast-title">コードレビュー</div>
+          <div class="toast-body" id="code-review-body"></div>
+        </div>
+        <button id="code-review-close" class="toast-close">×</button>
       </div>
     </div>
   </body>

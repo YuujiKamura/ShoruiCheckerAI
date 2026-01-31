@@ -1,5 +1,7 @@
 import { parseIndividualResults } from "./utils/analysis.js";
+import { createPlainTextCopy } from "./utils/clipboard.js";
 import { escapeHtml, markdownToHtml } from "./utils/text.js";
+import { updateButtonsState } from "./utils/ui.js";
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
@@ -176,6 +178,8 @@ function initFileButtons() {
   document.getElementById("select-all-btn").addEventListener("click", selectAll);
   document.getElementById("select-none-btn").addEventListener("click", selectNone);
   document.getElementById("guidelines-btn").addEventListener("click", generateGuidelines);
+  document.getElementById("custom-instruction").addEventListener("input", updateButtons);
+  document.getElementById("copy-instruction-btn").addEventListener("click", copyCustomInstruction);
 }
 
 async function initTauriListeners() {
@@ -358,10 +362,25 @@ function toggleFile(index) {
 function updateButtons() {
   const checkedCount = pdfFiles.filter(f => f.checked).length;
   const checkedWithResults = pdfFiles.filter(f => f.checked && f.result && !f.resultError).length;
+  const busy = pdfFiles.some(f => f.analyzing);
+  const customInstruction = document.getElementById("custom-instruction").value.trim();
 
-  document.getElementById("analyze-btn").disabled = checkedCount === 0;
-  document.getElementById("compare-btn").disabled = checkedCount < 2;
-  document.getElementById("guidelines-btn").disabled = checkedWithResults === 0;
+  const state = updateButtonsState({
+    hasFiles: pdfFiles.length > 0,
+    hasChecked: checkedCount > 0,
+    hasResultsSelected: checkedWithResults > 0,
+    busy,
+    hasCustomInstruction: customInstruction.length > 0,
+  });
+
+  document.getElementById("analyze-btn").disabled = state.analyzeDisabled;
+  document.getElementById("compare-btn").disabled = state.compareDisabled;
+  document.getElementById("clear-btn").disabled = state.clearDisabled;
+  document.getElementById("select-all-btn").disabled = state.selectAllDisabled;
+  document.getElementById("select-none-btn").disabled = state.selectNoneDisabled;
+  document.getElementById("guidelines-btn").disabled = state.guidelinesDisabled;
+  document.getElementById("custom-instruction").disabled = state.customInstructionDisabled;
+  document.getElementById("copy-instruction-btn").disabled = state.copyInstructionDisabled;
 }
 
 function getCheckedFiles() {
@@ -388,6 +407,23 @@ function clearFiles() {
   updateList();
   document.getElementById("result-section").hidden = true;
   document.getElementById("terminal-section").hidden = true;
+}
+
+async function copyCustomInstruction() {
+  const resultContent = document.getElementById("result-content");
+  const customInput = document.getElementById("custom-instruction");
+  const existing = customInput.value.trim();
+  if (!resultContent || !resultContent.innerHTML) return;
+
+  const plain = createPlainTextCopy(resultContent.innerHTML);
+  const nextValue = existing ? `${existing}\n${plain}` : plain;
+  try {
+    await navigator.clipboard.writeText(plain);
+  } catch (e) {
+    console.warn("Clipboard copy failed:", e);
+  }
+  customInput.value = nextValue;
+  updateButtons();
 }
 
 async function openFileDialog() {

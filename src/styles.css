@@ -777,3 +777,57 @@ button {
 .toast-close:hover {
   color: #ff4757;
 }
+
+/* Code review toast */
+.code-review-toast .toast-content {
+  border-left-color: #3fb950;
+}
+
+.code-review-toast.has-issues .toast-content {
+  border-left-color: #f85149;
+}
+
+.code-review-toast .toast-title {
+  color: #3fb950;
+}
+
+.code-review-toast.has-issues .toast-title {
+  color: #f85149;
+}
+
+.code-review-toast .toast-body {
+  white-space: pre-wrap;
+  max-width: 300px;
+  max-height: 100px;
+  overflow-y: auto;
+}
+
+/* Checkbox label */
+.checkbox-label {
+  display: flex !important;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: #00d9ff;
+  cursor: pointer;
+}
+
+.checkbox-label span {
+  color: #eee;
+  font-size: 0.9rem;
+}
+.custom-instruction .instruction-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.custom-instruction .instruction-header .small-btn {
+  padding: 6px 10px;
+}
