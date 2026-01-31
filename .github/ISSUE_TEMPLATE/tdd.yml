@@ -1,0 +1,52 @@
+name: TDD Issue
+description: テスト先行の作業チケット
+labels: [tdd]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        このIssueはTDD前提です。Issue作成と同時にテストを先に作成してください。
+        ローカルで以下を実行すると、Issue内容からテスト雛形を生成します。
+        `npm run tdd:issue -- path/to/issue.md`
+
+  - type: checkboxes
+    id: tdd-checks
+    attributes:
+      label: TDD確認
+      description: 全てにチェックが入らないと着手禁止
+      options:
+        - label: 先にテストを書く（または既存テストの不足を埋める）
+          required: true
+        - label: 失敗→成功の順で実行する（red→green→refactor）
+          required: true
+        - label: 変更範囲に応じてテストを更新する
+          required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: 変更範囲
+      description: 触る領域（フロント/バック/共通）と対象モジュールを記入
+      placeholder: src/main.js, src-tauri/src/analysis.rs など
+    validations:
+      required: true
+
+  - type: textarea
+    id: tests
+    attributes:
+      label: 先に書くテスト
+      description: テスト名や対象ケースを列挙
+      placeholder: |
+        - tests/frontend/analysis.test.js: parseIndividualResults の境界値
+        - src-tauri/tests/gemini_cli.rs: temp dir unique
+    validations:
+      required: true
+
+  - type: textarea
+    id: done
+    attributes:
+      label: 完了条件
+      description: 何が通ればOKか（テスト/動作）
+      placeholder: npm run test && cargo test が通る
+    validations:
+      required: true
