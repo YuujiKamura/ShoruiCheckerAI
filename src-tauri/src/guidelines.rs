@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
 use crate::events::emit_log;
-use crate::gemini_cli::run_gemini_with_prompt;
+use crate::gemini_cli::{run_gemini_in_temp, GeminiRequest};
 use crate::pdf_embed::{read_embedded_data_from_pdf, PdfEmbeddedData};
 use crate::settings::{load_settings, DEFAULT_MODEL};
 
@@ -227,16 +227,11 @@ JSON形式のみ出力。説明文不要。
 
     emit_log(&app, "Geminiで要約中...", "wave");
 
-    // Call Gemini
-    let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    let temp_dir = home_dir.join(".shoruichecker_temp_guidelines");
-    fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
-
     let model = load_settings()
         .model
         .unwrap_or_else(|| DEFAULT_MODEL.to_string());
-    let output = run_gemini_with_prompt(&temp_dir, &prompt, &model, None);
-    let _ = fs::remove_dir_all(&temp_dir);
+    let request = GeminiRequest::json(&prompt, &model);
+    let output = run_gemini_in_temp(".shoruichecker_temp_guidelines", &request);
 
     match output {
         Ok(result) => {

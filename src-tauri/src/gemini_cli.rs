@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
 
 #[cfg(target_os = "windows")]
@@ -37,6 +38,15 @@ impl<'a> GeminiRequest<'a> {
             model,
             files: Some(files),
             output_format: "text",
+        }
+    }
+
+    pub fn json(prompt: &'a str, model: &'a str) -> Self {
+        Self {
+            prompt,
+            model,
+            files: None,
+            output_format: "json",
         }
     }
 }
@@ -84,6 +94,13 @@ pub fn run_gemini(temp_dir: &Path, request: &GeminiRequest<'_>) -> Result<String
     }
 }
 
+pub fn run_gemini_in_temp(prefix: &str, request: &GeminiRequest<'_>) -> Result<String, String> {
+    let temp_dir = create_temp_dir(prefix)?;
+    let result = run_gemini(&temp_dir, request);
+    cleanup_temp_dir(&temp_dir);
+    result
+}
+
 pub fn run_gemini_with_prompt(
     temp_dir: &Path,
     prompt: &str,
@@ -96,6 +113,17 @@ pub fn run_gemini_with_prompt(
         GeminiRequest::text(prompt, model)
     };
     run_gemini(temp_dir, &request)
+}
+
+pub fn create_temp_dir(prefix: &str) -> Result<PathBuf, String> {
+    let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let temp_dir = home_dir.join(prefix);
+    fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
+    Ok(temp_dir)
+}
+
+pub fn cleanup_temp_dir(temp_dir: &Path) {
+    let _ = fs::remove_dir_all(temp_dir);
 }
 
 fn build_ps_script(gemini_path: &str, request: &GeminiRequest<'_>) -> String {

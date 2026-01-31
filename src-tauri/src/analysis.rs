@@ -1,12 +1,12 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::thread;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 use crate::events::emit_log;
-use crate::gemini_cli::run_gemini_with_prompt;
+use crate::gemini_cli::{cleanup_temp_dir, create_temp_dir, run_gemini_with_prompt};
 use crate::guidelines::{detect_document_type, get_relevant_guidelines, load_guidelines_json};
 use crate::history::{
     build_history_context, create_history_entry, load_history, save_history,
@@ -62,9 +62,7 @@ fn analyze_single_pdf(
     };
 
     // Create temp directory for this task
-    let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    let temp_dir = home_dir.join(format!(".shoruichecker_temp_{}", task_id));
-    fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
+    let temp_dir = create_temp_dir(&format!(".shoruichecker_temp_{}", task_id))?;
 
     // Copy PDF to temp directory
     let dest_path = temp_dir.join(&file_name);
@@ -112,7 +110,7 @@ fn analyze_single_pdf(
 
     let pdfs = vec![file_name.clone()];
     let output = run_gemini_with_prompt(&temp_dir, &prompt, model, Some(&pdfs));
-    let _ = fs::remove_dir_all(&temp_dir);
+    cleanup_temp_dir(&temp_dir);
 
     match output {
         Ok(result) => {
@@ -139,9 +137,7 @@ fn analyze_single_pdf(
 
 /// 複数PDFをまとめて照合解析
 fn analyze_compare_pdfs(paths: &[String], model: &str, custom_instruction: &str) -> Result<String, String> {
-    let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    let temp_dir = home_dir.join(".shoruichecker_temp_compare");
-    fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
+    let temp_dir = create_temp_dir(".shoruichecker_temp_compare")?;
 
     // Get project folder from first file
     let project_folder = paths
@@ -244,7 +240,7 @@ fn analyze_compare_pdfs(paths: &[String], model: &str, custom_instruction: &str)
     );
 
     let output = run_gemini_with_prompt(&temp_dir, &prompt, model, Some(&file_names));
-    let _ = fs::remove_dir_all(&temp_dir);
+    cleanup_temp_dir(&temp_dir);
 
     match output {
         Ok(result) => {

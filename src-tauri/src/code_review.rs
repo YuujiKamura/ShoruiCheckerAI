@@ -17,7 +17,7 @@ use std::os::windows::process::CommandExt;
 use crate::CREATE_NO_WINDOW;
 
 use crate::events::{CodeReviewEvent, LogEvent};
-use crate::gemini_cli::run_gemini_with_prompt;
+use crate::gemini_cli::{run_gemini_in_temp, GeminiRequest};
 use crate::settings::{load_settings, save_settings, DEFAULT_MODEL};
 
 // Debounce duration for code review (500ms)
@@ -138,10 +138,6 @@ fn read_file_content(file_path: &Path) -> Option<String> {
 
 /// コード変更をGemini CLIでレビュー
 fn review_code_change(file_path: &Path, content: &str, model: &str) -> Result<String, String> {
-    let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    let temp_dir = home_dir.join(".shoruichecker_code_review_temp");
-    fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
-
     let file_name = file_path
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
@@ -176,10 +172,8 @@ fn review_code_change(file_path: &Path, content: &str, model: &str) -> Result<St
         content
     );
 
-    let output = run_gemini_with_prompt(&temp_dir, &prompt, model, None);
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    output
+    let request = GeminiRequest::text(&prompt, model);
+    run_gemini_in_temp(".shoruichecker_code_review_temp", &request)
 }
 
 /// レビュー結果をログに追記（JSON Lines形式）
