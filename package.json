@@ -7,7 +7,8 @@
     "tauri": "tauri",
     "test:frontend": "node --test tests/frontend/*.test.js",
     "test:tauri": "cd src-tauri && cargo test",
-    "test": "npm run test:frontend && npm run test:tauri"
+    "test": "npm run test:frontend && npm run test:tauri",
+    "tdd:guard": "node scripts/tdd/guard.js"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"
