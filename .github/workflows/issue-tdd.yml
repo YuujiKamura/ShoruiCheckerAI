@@ -26,6 +26,7 @@ jobs:
               '',
               '1. Issue本文を `issue.md` として保存',
               '2. `npm run tdd:issue -- issue.md` を実行',
+              '   もしくは `npm run tdd:issue:gh -- ' + issue.number + '` を実行',
               '3. `npm run test` を実行',
               '',
               'Issueテンプレに沿って「先に書くテスト」を必ず作成してください。'
