@@ -10,7 +10,9 @@
     "test": "npm run test:frontend && npm run test:tauri",
     "tdd:guard": "node scripts/tdd/guard.js",
     "tdd:issue": "node scripts/tdd/from-issue.js",
-    "tdd:issue:gh": "node scripts/tdd/from-issue-gh.js"
+    "tdd:issue:gh": "node scripts/tdd/from-issue-gh.js",
+    "log:llm": "node scripts/logging/llm-wrapper.js",
+    "log:chat": "node scripts/logging/chat-log.js"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

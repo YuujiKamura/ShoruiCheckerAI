@@ -32,3 +32,4 @@ poppler.zip
 
 # Package lock (optional)
 package-lock.json
+logs/
