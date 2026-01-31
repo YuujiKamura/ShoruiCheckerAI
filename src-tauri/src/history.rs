@@ -35,7 +35,7 @@ pub struct AnalysisHistory {
 /// `shoruichecker/history/{folder_hash}.json`
 pub fn get_history_path(project_folder: &str) -> PathBuf {
     let config_dir = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
-    let folder_hash = format!("{:x}", md5_hash(project_folder));
+    let folder_hash = format!("{:x}", path_hash(project_folder));
     config_dir
         .join("shoruichecker")
         .join("history")
@@ -45,7 +45,7 @@ pub fn get_history_path(project_folder: &str) -> PathBuf {
 /// Simple hash function to generate a unique filename from a folder path
 ///
 /// Uses DefaultHasher to create a deterministic hash from the folder path string.
-pub fn md5_hash(s: &str) -> u64 {
+pub fn path_hash(s: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     s.hash(&mut hasher);
     hasher.finish()
@@ -198,10 +198,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_md5_hash() {
-        let hash1 = md5_hash("test/folder/path");
-        let hash2 = md5_hash("test/folder/path");
-        let hash3 = md5_hash("different/path");
+    fn test_path_hash() {
+        let hash1 = path_hash("test/folder/path");
+        let hash2 = path_hash("test/folder/path");
+        let hash3 = path_hash("different/path");
 
         assert_eq!(hash1, hash2);
         assert_ne!(hash1, hash3);

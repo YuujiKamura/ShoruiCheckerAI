@@ -16,9 +16,16 @@ use crate::error::{AppError, AppResult};
 static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 pub fn gemini_cmd_path() -> String {
-    std::env::var("APPDATA")
-        .map(|p| format!("{}\\npm\\gemini.cmd", p))
-        .unwrap_or_else(|_| "gemini".to_string())
+    // 環境変数で明示的に指定されていればそれを使用
+    if let Ok(path) = std::env::var("GEMINI_CMD_PATH") {
+        return path;
+    }
+    // それ以外はPATHから探す（OS依存）
+    if cfg!(target_os = "windows") {
+        "gemini.cmd".to_string()
+    } else {
+        "gemini".to_string()
+    }
 }
 
 pub struct GeminiRequest<'a> {
@@ -124,10 +131,10 @@ pub fn run_gemini_with_prompt(
 }
 
 pub fn create_temp_dir(prefix: &str) -> AppResult<PathBuf> {
-    let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let base_dir = std::env::temp_dir();
     let unique = unique_suffix();
     let dir_name = format!("{}-{}", prefix, unique);
-    let temp_dir = home_dir.join(dir_name);
+    let temp_dir = base_dir.join(dir_name);
     fs::create_dir_all(&temp_dir)?;
     Ok(temp_dir)
 }
