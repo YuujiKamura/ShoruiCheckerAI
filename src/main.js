@@ -1,3 +1,6 @@
+import { parseIndividualResults } from "./utils/analysis.js";
+import { escapeHtml, markdownToHtml } from "./utils/text.js";
+
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 const { open } = window.__TAURI__.dialog;
@@ -7,137 +10,215 @@ const { isPermissionGranted, requestPermission, sendNotification } = window.__TA
 let pdfFiles = [];
 let logUnlisten = null;
 
-// Initialize
-window.addEventListener("DOMContentLoaded", async () => {
-  const dropZone = document.getElementById("drop-zone");
-  const analyzeBtn = document.getElementById("analyze-btn");
-  const clearBtn = document.getElementById("clear-btn");
-  const settingsBtn = document.getElementById("settings-btn");
-  const closeSettings = document.getElementById("close-settings");
-  const selectFolderBtn = document.getElementById("select-folder-btn");
-  const settingsModal = document.getElementById("settings-modal");
+// ============================================
+// 初期化 - 責務ごとに分割
+// ============================================
 
-  // Load settings and history in parallel (non-blocking)
-  Promise.all([
-    invoke("get_watch_folder"),
-    invoke("get_model"),
-    invoke("get_all_history")
-  ]).then(([watchFolder, currentModel, history]) => {
+window.addEventListener("DOMContentLoaded", async () => {
+  await initSettings();
+  await initEventListeners();
+  await initTauriListeners();
+  await initStartupFile();
+});
+
+async function initSettings() {
+  try {
+    const [watchFolder, currentModel, history, codeWatchFolder, codeReviewEnabled] = await Promise.all([
+      invoke("get_watch_folder"),
+      invoke("get_model"),
+      invoke("get_all_history"),
+      invoke("get_code_watch_folder"),
+      invoke("is_code_review_enabled")
+    ]);
+
+    // PDF監視設定
     if (watchFolder) {
       document.getElementById("watch-folder").value = watchFolder;
       document.getElementById("watch-status").textContent = "監視中: " + watchFolder;
     }
     document.getElementById("model-select").value = currentModel;
 
-    // Load history into file list
-    if (history && history.length > 0) {
-      for (const entry of history) {
-        // Skip if already in list
-        if (pdfFiles.find(f => f.path === entry.file_path)) continue;
-        pdfFiles.push({
-          name: entry.file_name,
-          path: entry.file_path,
-          checked: false,
-          result: entry.summary,
-          resultError: false,
-          analyzedAt: entry.analyzed_at,
-          documentType: entry.document_type
-        });
+    // コードレビュー設定
+    if (codeWatchFolder) {
+      document.getElementById("code-watch-folder").value = codeWatchFolder;
+      if (codeReviewEnabled) {
+        document.getElementById("code-watch-status").textContent = "コード監視中: " + codeWatchFolder;
       }
-      updateList();
     }
-  }).catch(console.error);
+    document.getElementById("code-review-enabled").checked = codeReviewEnabled;
 
-  // Model selection
+    // 履歴読み込み
+    if (history && history.length > 0) {
+      loadHistoryToFileList(history);
+    }
+  } catch (e) {
+    console.error("Settings load error:", e);
+  }
+
+  // 認証状態確認（遅延実行）
+  setTimeout(checkAuthStatus, 2000);
+}
+
+function loadHistoryToFileList(history) {
+  for (const entry of history) {
+    if (pdfFiles.find(f => f.path === entry.file_path)) continue;
+    pdfFiles.push({
+      name: entry.file_name,
+      path: entry.file_path,
+      checked: false,
+      result: entry.summary,
+      resultError: false,
+      analyzedAt: entry.analyzed_at,
+      documentType: entry.document_type
+    });
+  }
+  updateList();
+}
+
+function initEventListeners() {
+  // モデル選択
   document.getElementById("model-select").addEventListener("change", async (e) => {
     await invoke("set_model", { model: e.target.value });
   });
 
-  // Check for startup file (CLI argument)
-  const startupFile = await invoke("get_startup_file");
-  if (startupFile) {
-    const name = startupFile.split(/[\\/]/).pop();
-    pdfFiles.push({ name, path: startupFile, checked: true });
-    updateList();
-    // Auto-analyze after short delay
-    setTimeout(() => analyze("individual"), 500);
-  }
+  // PDF監視フォルダ選択
+  document.getElementById("select-folder-btn").addEventListener("click", () => selectWatchFolder("pdf"));
 
-  // Check Gemini auth status (delayed to avoid blocking startup)
-  setTimeout(() => checkAuthStatus(), 2000);
+  // コード監視フォルダ選択
+  document.getElementById("select-code-folder-btn").addEventListener("click", () => selectWatchFolder("code"));
 
-  // Auth button
+  // コードレビュー有効/無効
+  document.getElementById("code-review-enabled").addEventListener("change", toggleCodeReview);
+
+  // 認証ボタン
   document.getElementById("auth-btn").addEventListener("click", async () => {
     await invoke("open_gemini_auth");
-    // Recheck after a delay
     setTimeout(checkAuthStatus, 3000);
   });
 
-  // Settings modal
-  settingsBtn.addEventListener("click", () => {
-    settingsModal.hidden = false;
-  });
+  // 設定モーダル
+  initSettingsModal();
 
-  closeSettings.addEventListener("click", () => {
-    settingsModal.hidden = true;
-  });
+  // ファイル操作ボタン
+  initFileButtons();
 
-  settingsModal.addEventListener("click", (e) => {
-    if (e.target === settingsModal) {
-      settingsModal.hidden = true;
+  // トースト閉じるボタン
+  document.getElementById("toast-close").addEventListener("click", () => hideNotificationToast("notification-toast"));
+  document.getElementById("code-review-close").addEventListener("click", () => hideNotificationToast("code-review-toast"));
+
+  // ドロップゾーン
+  document.getElementById("drop-zone").addEventListener("click", openFileDialog);
+}
+
+async function selectWatchFolder(type) {
+  const isCode = type === "code";
+  const inputId = isCode ? "code-watch-folder" : "watch-folder";
+  const statusId = isCode ? "code-watch-status" : "watch-status";
+  const command = isCode ? "set_code_watch_folder" : "set_watch_folder";
+
+  try {
+    const folder = await open({ directory: true });
+    if (!folder) return;
+
+    document.getElementById(inputId).value = folder;
+    await invoke(command, { folder });
+
+    if (isCode) {
+      const enabled = document.getElementById("code-review-enabled").checked;
+      document.getElementById(statusId).textContent = enabled
+        ? "コード監視中: " + folder
+        : "フォルダ設定済み（監視停止中）";
+    } else {
+      document.getElementById(statusId).textContent = "監視開始: " + folder;
     }
-  });
+    document.getElementById(statusId).classList.remove("error");
+  } catch (e) {
+    document.getElementById(statusId).textContent = "エラー: " + e;
+    document.getElementById(statusId).classList.add("error");
+  }
+}
 
-  // Select folder
-  selectFolderBtn.addEventListener("click", async () => {
-    try {
-      const folder = await open({ directory: true });
-      if (folder) {
-        document.getElementById("watch-folder").value = folder;
-        await invoke("set_watch_folder", { folder });
-        document.getElementById("watch-status").textContent = "監視開始: " + folder;
-        document.getElementById("watch-status").classList.remove("error");
-      }
-    } catch (e) {
-      document.getElementById("watch-status").textContent = "エラー: " + e;
-      document.getElementById("watch-status").classList.add("error");
+async function toggleCodeReview(e) {
+  const enabled = e.target.checked;
+  const statusEl = document.getElementById("code-watch-status");
+
+  try {
+    await invoke("set_code_review_enabled", { enabled });
+    const folder = document.getElementById("code-watch-folder").value;
+
+    if (enabled && folder) {
+      statusEl.textContent = "コード監視中: " + folder;
+    } else if (enabled) {
+      statusEl.textContent = "フォルダを選択してください";
+    } else {
+      statusEl.textContent = "コード監視停止";
     }
-  });
+    statusEl.classList.remove("error");
+  } catch (e) {
+    statusEl.textContent = "エラー: " + e;
+    statusEl.classList.add("error");
+  }
+}
 
-  // Listen for PDF detection - auto add to list
+function initSettingsModal() {
+  const modal = document.getElementById("settings-modal");
+  document.getElementById("settings-btn").addEventListener("click", () => modal.hidden = false);
+  document.getElementById("close-settings").addEventListener("click", () => modal.hidden = true);
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal) modal.hidden = true;
+  });
+}
+
+function initFileButtons() {
+  document.getElementById("analyze-btn").addEventListener("click", () => analyze("individual"));
+  document.getElementById("compare-btn").addEventListener("click", () => analyze("compare"));
+  document.getElementById("clear-btn").addEventListener("click", clearFiles);
+  document.getElementById("select-all-btn").addEventListener("click", selectAll);
+  document.getElementById("select-none-btn").addEventListener("click", selectNone);
+  document.getElementById("guidelines-btn").addEventListener("click", generateGuidelines);
+}
+
+async function initTauriListeners() {
+  const dropZone = document.getElementById("drop-zone");
+
+  // PDF検出
   await listen("pdf-detected", (event) => {
     const { path, name } = event.payload;
-    // Add to file list automatically
     if (!pdfFiles.find(f => f.path === path)) {
       pdfFiles.push({ name, path, checked: true });
       updateList();
-      // Show toast notification (info only)
-      showToast(name);
+      showNotificationToast("notification-toast", { icon: "📄", title: "PDF追加", body: name });
     }
   });
 
-  // Listen for notification request
+  // システム通知
   await listen("show-notification", async (event) => {
-    const { title, body, path } = event.payload;
-
-    // Check permission and send system notification
+    const { title, body } = event.payload;
     let permissionGranted = await isPermissionGranted();
     if (!permissionGranted) {
       const permission = await requestPermission();
       permissionGranted = permission === 'granted';
     }
-
     if (permissionGranted) {
       sendNotification({ title, body });
     }
   });
 
-  // Toast close button
-  document.getElementById("toast-close").addEventListener("click", () => {
-    hideToast();
+  // コードレビュー完了
+  await listen("code-review-complete", (event) => {
+    const { name, review_result, has_issues } = event.payload;
+    const shortResult = review_result.length > 100 ? review_result.substring(0, 100) + "..." : review_result;
+    showNotificationToast("code-review-toast", {
+      icon: has_issues ? "⚠️" : "✅",
+      title: "コードレビュー",
+      body: `<strong>${escapeHtml(name)}</strong><br>${escapeHtml(shortResult)}`,
+      isHtml: true,
+      hasIssues: has_issues,
+      duration: has_issues ? 10000 : 5000
+    });
   });
 
-  // Tauri file drop event
+  // ドラッグ&ドロップ
   await listen("tauri://drag-drop", async (event) => {
     const paths = event.payload.paths || [];
     for (const path of paths) {
@@ -145,7 +226,6 @@ window.addEventListener("DOMContentLoaded", async () => {
         const name = path.split(/[\\/]/).pop();
         if (!pdfFiles.find(f => f.path === path)) {
           const file = { name, path, checked: true };
-          // Check for embedded result in PDF
           await loadEmbeddedResult(file);
           pdfFiles.push(file);
         }
@@ -154,52 +234,55 @@ window.addEventListener("DOMContentLoaded", async () => {
     updateList();
   });
 
-  await listen("tauri://drag-enter", () => {
-    dropZone.classList.add("dragover");
-  });
+  await listen("tauri://drag-enter", () => dropZone.classList.add("dragover"));
+  await listen("tauri://drag-leave", () => dropZone.classList.remove("dragover"));
+}
 
-  await listen("tauri://drag-leave", () => {
-    dropZone.classList.remove("dragover");
-  });
+async function initStartupFile() {
+  const startupFile = await invoke("get_startup_file");
+  if (startupFile) {
+    const name = startupFile.split(/[\\/]/).pop();
+    pdfFiles.push({ name, path: startupFile, checked: true });
+    updateList();
+    setTimeout(() => analyze("individual"), 500);
+  }
+}
 
-  // Click to open file dialog
-  dropZone.addEventListener("click", async () => {
-    try {
-      const selected = await open({
-        multiple: true,
-        filters: [{ name: "PDF", extensions: ["pdf"] }]
-      });
-      if (selected) {
-        const paths = Array.isArray(selected) ? selected : [selected];
-        for (const path of paths) {
-          const name = path.split(/[\\/]/).pop();
-          if (!pdfFiles.find(f => f.path === path)) {
-            const file = { name, path, checked: true };
-            // Check for embedded result in PDF
-            await loadEmbeddedResult(file);
-            pdfFiles.push(file);
-          }
-        }
-        updateList();
-      }
-    } catch (e) {
-      console.error("File open error:", e);
+// ============================================
+// 通知トースト - 統合された汎用関数
+// ============================================
+
+function showNotificationToast(toastId, options) {
+  const toast = document.getElementById(toastId);
+  const body = toast.querySelector(".toast-body");
+  const icon = toast.querySelector(".toast-icon");
+
+  if (icon && options.icon) icon.textContent = options.icon;
+  if (body) {
+    if (options.isHtml) {
+      body.innerHTML = options.body;
+    } else {
+      body.textContent = options.body;
     }
-  });
+  }
 
-  // Button events
-  const compareBtn = document.getElementById("compare-btn");
-  const selectAllBtn = document.getElementById("select-all-btn");
-  const selectNoneBtn = document.getElementById("select-none-btn");
-  const guidelinesBtn = document.getElementById("guidelines-btn");
+  if (options.hasIssues !== undefined) {
+    toast.classList.toggle("has-issues", options.hasIssues);
+  }
 
-  analyzeBtn.addEventListener("click", () => analyze("individual"));
-  compareBtn.addEventListener("click", () => analyze("compare"));
-  clearBtn.addEventListener("click", clearFiles);
-  selectAllBtn.addEventListener("click", selectAll);
-  selectNoneBtn.addEventListener("click", selectNone);
-  guidelinesBtn.addEventListener("click", generateGuidelines);
-});
+  toast.hidden = false;
+
+  const duration = options.duration || 5000;
+  setTimeout(() => hideNotificationToast(toastId), duration);
+}
+
+function hideNotificationToast(toastId) {
+  document.getElementById(toastId).hidden = true;
+}
+
+// ============================================
+// 認証
+// ============================================
 
 async function checkAuthStatus() {
   const statusEl = document.getElementById("auth-status");
@@ -208,32 +291,17 @@ async function checkAuthStatus() {
 
   try {
     const isAuth = await invoke("check_gemini_auth");
-    if (isAuth) {
-      statusEl.textContent = "✓ 認証済み";
-      statusEl.className = "auth-status ok";
-    } else {
-      statusEl.textContent = "✗ 未認証";
-      statusEl.className = "auth-status ng";
-    }
+    statusEl.textContent = isAuth ? "✓ 認証済み" : "✗ 未認証";
+    statusEl.className = "auth-status " + (isAuth ? "ok" : "ng");
   } catch (e) {
     statusEl.textContent = "✗ エラー";
     statusEl.className = "auth-status ng";
   }
 }
 
-function showToast(name) {
-  document.getElementById("toast-body").textContent = name;
-  document.getElementById("notification-toast").hidden = false;
-
-  // Auto-hide after 5 seconds
-  setTimeout(() => {
-    hideToast();
-  }, 5000);
-}
-
-function hideToast() {
-  document.getElementById("notification-toast").hidden = true;
-}
+// ============================================
+// ファイルリスト操作
+// ============================================
 
 function updateList() {
   const list = document.getElementById("pdf-list");
@@ -288,15 +356,12 @@ function toggleFile(index) {
 }
 
 function updateButtons() {
-  const analyzeBtn = document.getElementById("analyze-btn");
-  const compareBtn = document.getElementById("compare-btn");
-  const guidelinesBtn = document.getElementById("guidelines-btn");
   const checkedCount = pdfFiles.filter(f => f.checked).length;
   const checkedWithResults = pdfFiles.filter(f => f.checked && f.result && !f.resultError).length;
 
-  analyzeBtn.disabled = checkedCount === 0;
-  compareBtn.disabled = checkedCount < 2;
-  guidelinesBtn.disabled = checkedWithResults === 0;
+  document.getElementById("analyze-btn").disabled = checkedCount === 0;
+  document.getElementById("compare-btn").disabled = checkedCount < 2;
+  document.getElementById("guidelines-btn").disabled = checkedWithResults === 0;
 }
 
 function getCheckedFiles() {
@@ -325,21 +390,59 @@ function clearFiles() {
   document.getElementById("terminal-section").hidden = true;
 }
 
+async function openFileDialog() {
+  try {
+    const selected = await open({
+      multiple: true,
+      filters: [{ name: "PDF", extensions: ["pdf"] }]
+    });
+    if (selected) {
+      const paths = Array.isArray(selected) ? selected : [selected];
+      for (const path of paths) {
+        const name = path.split(/[\\/]/).pop();
+        if (!pdfFiles.find(f => f.path === path)) {
+          const file = { name, path, checked: true };
+          await loadEmbeddedResult(file);
+          pdfFiles.push(file);
+        }
+      }
+      updateList();
+    }
+  } catch (e) {
+    console.error("File open error:", e);
+  }
+}
+
+async function loadEmbeddedResult(file) {
+  try {
+    const embedded = await invoke("read_pdf_result", { path: file.path });
+    if (embedded) {
+      const [result, date] = embedded;
+      file.result = result;
+      file.resultError = false;
+      file.analyzedAt = date;
+      file.embedded = true;
+    }
+  } catch (e) {
+    // Ignore - PDF doesn't have embedded result
+  }
+}
+
+// ============================================
+// ターミナル
+// ============================================
+
 function appendLog(message, level) {
   const terminal = document.getElementById("terminal-output");
 
-  // Remove existing status line when new wave comes or when done
   if (level === "wave" || level === "success" || level === "error") {
     const existingStatus = terminal.querySelector(".status-line");
-    if (existingStatus) {
-      existingStatus.remove();
-    }
+    if (existingStatus) existingStatus.remove();
   }
 
   const line = document.createElement("div");
 
   if (level === "wave") {
-    // Create prominent status line with animated dots
     line.className = "status-line";
     line.innerHTML = `<span class="status-text">${escapeHtml(message)}</span><span class="dots"></span>`;
   } else {
@@ -352,9 +455,12 @@ function appendLog(message, level) {
 }
 
 function clearTerminal() {
-  const terminal = document.getElementById("terminal-output");
-  terminal.innerHTML = "";
+  document.getElementById("terminal-output").innerHTML = "";
 }
+
+// ============================================
+// 解析処理
+// ============================================
 
 async function analyze(mode = "individual") {
   const checkedFiles = getCheckedFiles();
@@ -363,32 +469,24 @@ async function analyze(mode = "individual") {
   const terminalSection = document.getElementById("terminal-section");
   const resultSection = document.getElementById("result-section");
   const resultContent = document.getElementById("result-content");
-  const analyzeBtn = document.getElementById("analyze-btn");
-  const compareBtn = document.getElementById("compare-btn");
 
-  // Show terminal, hide result
+  // UI準備
   terminalSection.hidden = false;
   resultSection.hidden = true;
   clearTerminal();
-  analyzeBtn.disabled = true;
-  compareBtn.disabled = true;
+  document.getElementById("analyze-btn").disabled = true;
+  document.getElementById("compare-btn").disabled = true;
 
-  // Listen for log events
-  if (logUnlisten) {
-    logUnlisten();
-  }
+  // ログリスナー
+  if (logUnlisten) logUnlisten();
   logUnlisten = await listen("log", (event) => {
-    const { message, level } = event.payload;
-    appendLog(message, level);
+    appendLog(event.payload.message, event.payload.level);
   });
 
-  // Listen for per-file progress
   const progressUnlisten = await listen("analysis-progress", (event) => {
-    const { file_name, completed, success } = event.payload;
-    // Find the file and update its status
-    const file = pdfFiles.find(f => f.name === file_name);
+    const file = pdfFiles.find(f => f.name === event.payload.file_name);
     if (file) {
-      file.analyzing = !completed;
+      file.analyzing = !event.payload.completed;
       updateList();
     }
   });
@@ -400,48 +498,16 @@ async function analyze(mode = "individual") {
 
     const now = new Date().toLocaleString('ja-JP');
     if (mode === "compare") {
-      // 照合モード: 全ファイルに同じ結果を紐付け
-      checkedFiles.forEach(f => {
-        const file = pdfFiles.find(pf => pf.path === f.path);
-        if (file) {
-          file.result = result;
-          file.resultError = false;
-          file.compareMode = true;
-          file.analyzedAt = now;
-          file.documentType = "照合解析";
-        }
-      });
-      resultContent.innerHTML = markdownToHtml(result);
+      applyCompareResult(checkedFiles, result, now);
     } else {
-      // 個別モード: ファイルごとに結果をパース
-      const fileResults = parseIndividualResults(result);
-      checkedFiles.forEach(f => {
-        const file = pdfFiles.find(pf => pf.path === f.path);
-        if (file) {
-          const fileResult = fileResults[file.name];
-          if (fileResult) {
-            file.result = fileResult;
-            file.resultError = false;
-            file.analyzedAt = now;
-            file.embedded = true; // Result is embedded in PDF by backend
-          }
-        }
-      });
-      resultContent.innerHTML = markdownToHtml(result);
+      applyIndividualResults(checkedFiles, result, now);
     }
-
+    resultContent.innerHTML = markdownToHtml(result);
     resultSection.hidden = false;
     updateList();
   } catch (e) {
     appendLog(`エラー: ${e.toString()}`, "error");
-    // エラー時も結果を記録
-    checkedFiles.forEach(f => {
-      const file = pdfFiles.find(pf => pf.path === f.path);
-      if (file) {
-        file.result = e.toString();
-        file.resultError = true;
-      }
-    });
+    applyErrorResult(checkedFiles, e.toString());
     resultContent.innerHTML = `<p style="color: #ff4757;">エラー: ${escapeHtml(e.toString())}</p>`;
     resultSection.hidden = false;
     updateList();
@@ -455,9 +521,50 @@ async function analyze(mode = "individual") {
   }
 }
 
+function applyCompareResult(checkedFiles, result, timestamp) {
+  checkedFiles.forEach(f => {
+    const file = pdfFiles.find(pf => pf.path === f.path);
+    if (file) {
+      file.result = result;
+      file.resultError = false;
+      file.compareMode = true;
+      file.analyzedAt = timestamp;
+      file.documentType = "照合解析";
+    }
+  });
+}
+
+function applyIndividualResults(checkedFiles, result, timestamp) {
+  const fileResults = parseIndividualResults(result);
+  checkedFiles.forEach(f => {
+    const file = pdfFiles.find(pf => pf.path === f.path);
+    if (file) {
+      const fileResult = fileResults[file.name];
+      if (fileResult) {
+        file.result = fileResult;
+        file.resultError = false;
+        file.analyzedAt = timestamp;
+        file.embedded = true;
+      }
+    }
+  });
+}
+
+function applyErrorResult(checkedFiles, error) {
+  checkedFiles.forEach(f => {
+    const file = pdfFiles.find(pf => pf.path === f.path);
+    if (file) {
+      file.result = error;
+      file.resultError = true;
+    }
+  });
+}
+
+// ============================================
 // ガイドライン生成
+// ============================================
+
 async function generateGuidelines() {
-  // Get checked files with results
   const filesWithResults = pdfFiles.filter(f => f.checked && f.result && !f.resultError);
   if (filesWithResults.length === 0) {
     alert("解析結果のあるファイルを選択してください");
@@ -465,27 +572,20 @@ async function generateGuidelines() {
   }
 
   const paths = filesWithResults.map(f => f.path);
-  // Extract folder path from first file
   const folder = paths[0].replace(/[\\/][^\\/]+$/, "");
 
   const terminalSection = document.getElementById("terminal-section");
   const resultSection = document.getElementById("result-section");
   const resultContent = document.getElementById("result-content");
-  const guidelinesBtn = document.getElementById("guidelines-btn");
 
-  // Show terminal
   terminalSection.hidden = false;
   resultSection.hidden = true;
   clearTerminal();
-  guidelinesBtn.disabled = true;
+  document.getElementById("guidelines-btn").disabled = true;
 
-  // Listen for log events
-  if (logUnlisten) {
-    logUnlisten();
-  }
+  if (logUnlisten) logUnlisten();
   logUnlisten = await listen("log", (event) => {
-    const { message, level } = event.payload;
-    appendLog(message, level);
+    appendLog(event.payload.message, event.payload.level);
   });
 
   try {
@@ -511,76 +611,14 @@ async function generateGuidelines() {
   }
 }
 
-// 個別解析結果をファイルごとにパース
-function parseIndividualResults(result) {
-  const fileResults = {};
-  const sections = result.split(/\n## 📄 /);
+// ============================================
+// ユーティリティ
+// ============================================
 
-  for (const section of sections) {
-    if (!section.trim()) continue;
-    const lines = section.split('\n');
-    const fileName = lines[0].trim();
-    const content = lines.slice(1).join('\n').replace(/^---\n/, '').trim();
-    if (fileName) {
-      fileResults[fileName] = content;
-    }
-  }
+// ============================================
+// グローバル公開（onclick用）
+// ============================================
 
-  return fileResults;
-}
-
-// Load embedded analysis result from PDF metadata
-async function loadEmbeddedResult(file) {
-  try {
-    const embedded = await invoke("read_pdf_result", { path: file.path });
-    if (embedded) {
-      const [result, date] = embedded;
-      file.result = result;
-      file.resultError = false;
-      file.analyzedAt = date;
-      file.embedded = true; // Mark as loaded from PDF
-    }
-  } catch (e) {
-    // Ignore - PDF doesn't have embedded result
-  }
-}
-
-function escapeHtml(text) {
-  const div = document.createElement("div");
-  div.textContent = text || "";
-  return div.innerHTML;
-}
-
-function markdownToHtml(md) {
-  if (!md) return "";
-
-  return md
-    // Headers
-    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
-    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
-    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
-    // Bold
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    // Tables
-    .replace(/\|(.+)\|/g, (match) => {
-      const cells = match.split('|').filter(c => c.trim());
-      if (cells.every(c => /^[-:]+$/.test(c.trim()))) {
-        return ''; // Skip separator row
-      }
-      const isHeader = cells.some(c => c.includes('---'));
-      const tag = isHeader ? 'th' : 'td';
-      return '<tr>' + cells.map(c => `<${tag}>${c.trim()}</${tag}>`).join('') + '</tr>';
-    })
-    .replace(/(<tr>.*<\/tr>\n?)+/g, '<table>$&</table>')
-    // Lists
-    .replace(/^- (.+)$/gm, '<li>$1</li>')
-    .replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>')
-    // Line breaks
-    .replace(/\n\n/g, '</p><p>')
-    .replace(/\n/g, '<br>');
-}
-
-// Global functions for onclick
 window.removeFile = removeFile;
 window.toggleFile = toggleFile;
 window.showResult = showResult;

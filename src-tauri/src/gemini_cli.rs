@@ -176,6 +176,26 @@ pub fn clean_gemini_output(output: &str) -> String {
         .join("\n")
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn create_temp_dir_is_unique_and_cleanup_removes() {
+        let dir1 = create_temp_dir(".shoruichecker_test_tmp").expect("create dir1");
+        let dir2 = create_temp_dir(".shoruichecker_test_tmp").expect("create dir2");
+        assert_ne!(dir1, dir2);
+        assert!(dir1.exists());
+        assert!(dir2.exists());
+
+        cleanup_temp_dir(&dir1);
+        cleanup_temp_dir(&dir2);
+
+        assert!(!dir1.exists());
+        assert!(!dir2.exists());
+    }
+}
+
 fn unique_suffix() -> String {
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
