@@ -1,18 +1,11 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
-#[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
-
-#[cfg(target_os = "windows")]
-use crate::CREATE_NO_WINDOW;
-
 use crate::events::emit_log;
+use crate::gemini_cli::run_gemini_with_prompt;
 use crate::pdf_embed::{read_embedded_data_from_pdf, PdfEmbeddedData};
 use crate::settings::{load_settings, DEFAULT_MODEL};
 
@@ -239,106 +232,67 @@ JSON形式のみ出力。説明文不要。
     let temp_dir = home_dir.join(".shoruichecker_temp_guidelines");
     fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
 
-    let prompt_file = temp_dir.join("prompt.txt");
-    fs::write(&prompt_file, &prompt).map_err(|e| e.to_string())?;
-
-    let gemini_path = std::env::var("APPDATA")
-        .map(|p| format!("{}\\npm\\gemini.cmd", p))
-        .unwrap_or_else(|_| "gemini".to_string());
-
     let model = load_settings()
         .model
         .unwrap_or_else(|| DEFAULT_MODEL.to_string());
-
-    let ps_script = format!(
-        r#"$OutputEncoding = [Console]::OutputEncoding = [Text.Encoding]::UTF8
-Get-Content -Raw -Encoding UTF8 'prompt.txt' | & '{}' -m {} -o text
-"#,
-        gemini_path.replace("'", "''"),
-        model
-    );
-
-    let script_file = temp_dir.join("run.ps1");
-    fs::write(&script_file, &ps_script).map_err(|e| e.to_string())?;
-
-    let mut cmd = Command::new("powershell");
-    cmd.args([
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        &script_file.to_string_lossy(),
-    ])
-    .current_dir(&temp_dir);
-    #[cfg(target_os = "windows")]
-    cmd.creation_flags(CREATE_NO_WINDOW);
-
-    let output = cmd.output().map_err(|e| e.to_string())?;
+    let output = run_gemini_with_prompt(&temp_dir, &prompt, &model, None);
     let _ = fs::remove_dir_all(&temp_dir);
 
-    if output.status.success() {
-        let result = String::from_utf8_lossy(&output.stdout).to_string();
-        let result = result
-            .lines()
-            .filter(|line| {
-                !line.contains("Loaded cached credentials")
-                    && !line.contains("Hook registry initialized")
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Extract JSON from response (may be wrapped in ```json ... ```)
-        let json_str = if let Some(start) = result.find('{') {
-            if let Some(end) = result.rfind('}') {
-                &result[start..=end]
+    match output {
+        Ok(result) => {
+            // Extract JSON from response (may be wrapped in ```json ... ```)
+            let json_str = if let Some(start) = result.find('{') {
+                if let Some(end) = result.rfind('}') {
+                    &result[start..=end]
+                } else {
+                    &result
+                }
             } else {
                 &result
-            }
-        } else {
-            &result
-        };
+            };
 
-        // Parse and save as JSON
-        let guidelines_path = get_guidelines_path(&folder);
-        match serde_json::from_str::<Guidelines>(json_str) {
-            Ok(guidelines) => {
-                let json = serde_json::to_string_pretty(&guidelines).unwrap_or_default();
-                let _ = fs::write(&guidelines_path, &json);
+            // Parse and save as JSON
+            let guidelines_path = get_guidelines_path(&folder);
+            match serde_json::from_str::<Guidelines>(json_str) {
+                Ok(guidelines) => {
+                    let json = serde_json::to_string_pretty(&guidelines).unwrap_or_default();
+                    let _ = fs::write(&guidelines_path, &json);
 
-                let count = guidelines.common.len()
-                    + guidelines.categories.values().map(|v| v.len()).sum::<usize>();
-                emit_log(
-                    &app,
-                    &format!("✓ ガイドライン生成完了 ({} 項目)", count),
-                    "success",
-                );
+                    let count = guidelines.common.len()
+                        + guidelines.categories.values().map(|v| v.len()).sum::<usize>();
+                    emit_log(
+                        &app,
+                        &format!("✓ ガイドライン生成完了 ({} 項目)", count),
+                        "success",
+                    );
 
-                // Return human-readable summary
-                let mut summary = String::from("## ガイドライン\n\n");
-                if !guidelines.common.is_empty() {
-                    summary.push_str("### 共通\n");
-                    for item in &guidelines.common {
-                        summary.push_str(&format!("- {}\n", item));
+                    // Return human-readable summary
+                    let mut summary = String::from("## ガイドライン\n\n");
+                    if !guidelines.common.is_empty() {
+                        summary.push_str("### 共通\n");
+                        for item in &guidelines.common {
+                            summary.push_str(&format!("- {}\n", item));
+                        }
                     }
-                }
-                for (cat, items) in &guidelines.categories {
-                    summary.push_str(&format!("\n### {}\n", cat));
-                    for item in items {
-                        summary.push_str(&format!("- {}\n", item));
+                    for (cat, items) in &guidelines.categories {
+                        summary.push_str(&format!("\n### {}\n", cat));
+                        for item in items {
+                            summary.push_str(&format!("- {}\n", item));
+                        }
                     }
+                    Ok(summary)
                 }
-                Ok(summary)
-            }
-            Err(e) => {
-                emit_log(&app, &format!("JSON解析エラー: {} - 生データ保存", e), "info");
-                // Fallback: save raw result
-                let _ = fs::write(&guidelines_path.with_extension("md"), &result);
-                Ok(result)
+                Err(e) => {
+                    emit_log(&app, &format!("JSON解析エラー: {} - 生データ保存", e), "info");
+                    // Fallback: save raw result
+                    let _ = fs::write(&guidelines_path.with_extension("md"), &result);
+                    Ok(result)
+                }
             }
         }
-    } else {
-        let error = String::from_utf8_lossy(&output.stderr).to_string();
-        emit_log(&app, &format!("エラー: {}", error), "error");
-        Err(error)
+        Err(error) => {
+            emit_log(&app, &format!("エラー: {}", error), "error");
+            Err(error)
+        }
     }
 }

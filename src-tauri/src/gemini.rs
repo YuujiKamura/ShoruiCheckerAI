@@ -6,12 +6,12 @@ use std::os::windows::process::CommandExt;
 #[cfg(target_os = "windows")]
 use crate::CREATE_NO_WINDOW;
 
+use crate::gemini_cli::gemini_cmd_path;
+
 /// Open external terminal for Gemini authentication
 #[tauri::command]
 pub fn open_gemini_auth() -> Result<(), String> {
-    let gemini_path = std::env::var("APPDATA")
-        .map(|p| format!("{}\\npm\\gemini.cmd", p))
-        .unwrap_or_else(|_| "gemini".to_string());
+    let gemini_path = gemini_cmd_path();
 
     // Open new PowerShell window with gemini CLI
     Command::new("cmd")
@@ -25,9 +25,7 @@ pub fn open_gemini_auth() -> Result<(), String> {
 /// Check if Gemini CLI is authenticated
 #[tauri::command]
 pub fn check_gemini_auth() -> Result<bool, String> {
-    let gemini_path = std::env::var("APPDATA")
-        .map(|p| format!("{}\\npm\\gemini.cmd", p))
-        .unwrap_or_else(|_| "gemini".to_string());
+    let gemini_path = gemini_cmd_path();
 
     // Try running gemini with a simple command
     let mut cmd = Command::new("powershell");

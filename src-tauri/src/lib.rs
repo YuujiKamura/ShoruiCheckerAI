@@ -9,6 +9,7 @@ mod analysis;
 mod code_review;
 mod events;
 mod gemini;
+mod gemini_cli;
 mod guidelines;
 mod history;
 mod pdf_embed;

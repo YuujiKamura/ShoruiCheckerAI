@@ -1,18 +1,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::thread;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
-#[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
-
-#[cfg(target_os = "windows")]
-use crate::CREATE_NO_WINDOW;
-
 use crate::events::emit_log;
+use crate::gemini_cli::run_gemini_with_prompt;
 use crate::guidelines::{detect_document_type, get_relevant_guidelines, load_guidelines_json};
 use crate::history::{
     build_history_context, create_history_entry, load_history, save_history,
@@ -116,71 +110,30 @@ fn analyze_single_pdf(
         file_name
     );
 
-    let prompt_file = temp_dir.join("prompt.txt");
-    fs::write(&prompt_file, &prompt).map_err(|e| e.to_string())?;
-
-    let gemini_path = std::env::var("APPDATA")
-        .map(|p| format!("{}\\npm\\gemini.cmd", p))
-        .unwrap_or_else(|_| "gemini".to_string());
-
-    // Use stdin pipe to pass multi-line prompt correctly
-    let ps_script = format!(
-        r#"$OutputEncoding = [Console]::OutputEncoding = [Text.Encoding]::UTF8
-Get-Content -Raw -Encoding UTF8 'prompt.txt' | & '{}' -m {} -o text '{}'
-"#,
-        gemini_path.replace("'", "''"),
-        model,
-        file_name.replace("'", "''")
-    );
-
-    let script_file = temp_dir.join("run.ps1");
-    fs::write(&script_file, &ps_script).map_err(|e| e.to_string())?;
-
-    let mut cmd = Command::new("powershell");
-    cmd.args([
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        &script_file.to_string_lossy(),
-    ])
-    .current_dir(&temp_dir);
-    #[cfg(target_os = "windows")]
-    cmd.creation_flags(CREATE_NO_WINDOW);
-
-    let output = cmd.output().map_err(|e| e.to_string())?;
+    let pdfs = vec![file_name.clone()];
+    let output = run_gemini_with_prompt(&temp_dir, &prompt, model, Some(&pdfs));
     let _ = fs::remove_dir_all(&temp_dir);
 
-    if output.status.success() {
-        let result = String::from_utf8_lossy(&output.stdout).to_string();
-        let result = result
-            .lines()
-            .filter(|line| {
-                !line.contains("Loaded cached credentials")
-                    && !line.contains("Hook registry initialized")
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+    match output {
+        Ok(result) => {
+            // Save to history
+            let entry = create_history_entry(&file_name, path, &result);
+            let mut history = load_history(&project_folder);
+            // Remove old entry for same file if exists
+            history.entries.retain(|e| e.file_name != file_name);
+            history.entries.push(entry);
+            // Keep only last 50 entries
+            if history.entries.len() > 50 {
+                history.entries = history.entries.split_off(history.entries.len() - 50);
+            }
+            let _ = save_history(&history);
 
-        // Save to history
-        let entry = create_history_entry(&file_name, path, &result);
-        let mut history = load_history(&project_folder);
-        // Remove old entry for same file if exists
-        history.entries.retain(|e| e.file_name != file_name);
-        history.entries.push(entry);
-        // Keep only last 50 entries
-        if history.entries.len() > 50 {
-            history.entries = history.entries.split_off(history.entries.len() - 50);
+            // Embed result and custom instruction in PDF metadata (optional, ignore errors)
+            let _ = embed_result_in_pdf_with_instruction(path, &result, custom_instruction);
+
+            Ok(result)
         }
-        let _ = save_history(&history);
-
-        // Embed result and custom instruction in PDF metadata (optional, ignore errors)
-        let _ = embed_result_in_pdf_with_instruction(path, &result, custom_instruction);
-
-        Ok(result)
-    } else {
-        let error = String::from_utf8_lossy(&output.stderr).to_string();
-        Err(error)
+        Err(error) => Err(error),
     }
 }
 
@@ -290,97 +243,46 @@ fn analyze_compare_pdfs(paths: &[String], model: &str, custom_instruction: &str)
         history_context
     );
 
-    let prompt_file = temp_dir.join("prompt.txt");
-    fs::write(&prompt_file, &prompt).map_err(|e| e.to_string())?;
-
-    let gemini_path = std::env::var("APPDATA")
-        .map(|p| format!("{}\\npm\\gemini.cmd", p))
-        .unwrap_or_else(|_| "gemini".to_string());
-
-    // Use relative file names since current_dir is temp_dir
-    let pdf_array = file_names
-        .iter()
-        .map(|f| format!("    '{}'", f.replace("'", "''")))
-        .collect::<Vec<_>>()
-        .join(",\n");
-
-    // Use stdin pipe to pass multi-line prompt correctly
-    let ps_script = format!(
-        r#"$OutputEncoding = [Console]::OutputEncoding = [Text.Encoding]::UTF8
-$pdfs = @(
-{}
-)
-Get-Content -Raw -Encoding UTF8 'prompt.txt' | & '{}' -m {} -o text $pdfs
-"#,
-        pdf_array,
-        gemini_path.replace("'", "''"),
-        model
-    );
-
-    let script_file = temp_dir.join("run.ps1");
-    fs::write(&script_file, &ps_script).map_err(|e| e.to_string())?;
-
-    let mut cmd = Command::new("powershell");
-    cmd.args([
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        &script_file.to_string_lossy(),
-    ])
-    .current_dir(&temp_dir);
-    #[cfg(target_os = "windows")]
-    cmd.creation_flags(CREATE_NO_WINDOW);
-
-    let output = cmd.output().map_err(|e| e.to_string())?;
+    let output = run_gemini_with_prompt(&temp_dir, &prompt, model, Some(&file_names));
     let _ = fs::remove_dir_all(&temp_dir);
 
-    if output.status.success() {
-        let result = String::from_utf8_lossy(&output.stdout).to_string();
-        let result = result
-            .lines()
-            .filter(|line| {
-                !line.contains("Loaded cached credentials")
-                    && !line.contains("Hook registry initialized")
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+    match output {
+        Ok(result) => {
+            // Save comparison result to history for each file
+            let mut history = load_history(&project_folder);
+            let comparison_summary = format!("【照合解析】対象: {}", file_names.join(", "));
+            for (i, path) in paths.iter().enumerate() {
+                let file_name = &file_names[i];
+                let entry = AnalysisHistoryEntry {
+                    file_name: file_name.clone(),
+                    file_path: path.clone(),
+                    analyzed_at: chrono::Local::now()
+                        .format("%Y-%m-%d %H:%M:%S")
+                        .to_string(),
+                    document_type: Some("照合解析".to_string()),
+                    summary: comparison_summary.clone(),
+                    issues: result
+                        .lines()
+                        .filter(|line| line.contains("⚠"))
+                        .map(|s| s.trim().to_string())
+                        .collect(),
+                };
+                history.entries.retain(|e| e.file_name != *file_name);
+                history.entries.push(entry);
+            }
+            if history.entries.len() > 50 {
+                history.entries = history.entries.split_off(history.entries.len() - 50);
+            }
+            let _ = save_history(&history);
 
-        // Save comparison result to history for each file
-        let mut history = load_history(&project_folder);
-        let comparison_summary = format!("【照合解析】対象: {}", file_names.join(", "));
-        for (i, path) in paths.iter().enumerate() {
-            let file_name = &file_names[i];
-            let entry = AnalysisHistoryEntry {
-                file_name: file_name.clone(),
-                file_path: path.clone(),
-                analyzed_at: chrono::Local::now()
-                    .format("%Y-%m-%d %H:%M:%S")
-                    .to_string(),
-                document_type: Some("照合解析".to_string()),
-                summary: comparison_summary.clone(),
-                issues: result
-                    .lines()
-                    .filter(|line| line.contains("⚠"))
-                    .map(|s| s.trim().to_string())
-                    .collect(),
-            };
-            history.entries.retain(|e| e.file_name != *file_name);
-            history.entries.push(entry);
-        }
-        if history.entries.len() > 50 {
-            history.entries = history.entries.split_off(history.entries.len() - 50);
-        }
-        let _ = save_history(&history);
+            // Embed comparison result and instruction in all related PDFs
+            for path in paths {
+                let _ = embed_result_in_pdf_with_instruction(path, &result, custom_instruction);
+            }
 
-        // Embed comparison result and instruction in all related PDFs
-        for path in paths {
-            let _ = embed_result_in_pdf_with_instruction(path, &result, custom_instruction);
+            Ok(result)
         }
-
-        Ok(result)
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).to_string())
+        Err(error) => Err(error),
     }
 }
 
