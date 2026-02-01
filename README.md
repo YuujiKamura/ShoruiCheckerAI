@@ -37,7 +37,26 @@
 2. **失敗パターンをガイドライン化** - 検出した問題を `.guidelines.json` に蓄積
 3. **次回チェック時に参照** - 同じフォルダの書類は過去の失敗パターンを踏まえてチェック
 
-## 使い方（GUIがメイン）
+## 使い方
+
+### 起動
+
+開発時:
+
+```powershell
+npm install
+npm run tauri dev
+```
+
+配布ビルド済みEXEがある場合は、それを起動すればGUIが開く。  
+手元でビルドする場合:
+
+```powershell
+npm install
+npm run tauri build
+```
+
+Windowsなら `src-tauri/target/release/shoruichecker.exe` を実行。
 
 ### 基本フロー
 
