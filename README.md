@@ -79,6 +79,7 @@ Windowsなら `src-tauri/target/release/shoruichecker.exe` を実行。
 1. リストからPDFを選択
 2. 「解析」を実行
 3. 結果がPDFに埋め込まれる
+4. 解析時に「何を見てほしいか」を**自由に指定できるプロンプト欄**を備える
 
 #### 個別解析（単体チェック）
 
@@ -147,7 +148,9 @@ Windowsなら `src-tauri/target/release/shoruichecker.exe` を実行。
 ## 設定
 
 - **監視フォルダ**: 自動チェックするフォルダ
-- **AIモデル**: gemini-2.0-flash-exp（デフォルト）
+- **AIモデル**: gemini-2.5-pro（デフォルト）
+- **プロンプト**: 解析の観点をユーザーが任意指定
+- **コーディングエージェント連携**: cli-ai-analyzer / ai-code-review などの連携が必要
 
 ## 仕組み
 
