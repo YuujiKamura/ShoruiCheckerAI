@@ -1,7 +1,164 @@
-# Tauri + Vanilla
+# ShoruiChecker
 
-This template should help get you started developing with Tauri in vanilla HTML, CSS and Javascript.
+失敗事例を資産に変える、PDF書類チェッカー。
 
-## Recommended IDE Setup
+## 解決する問題
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+書類チェックは同じミスが何度も起きる:
+
+- 「また税込/税抜の混在か」
+- 「また人数と名前リストが合ってない」
+- 「また工期の日付が逆」
+
+チェックする人が変わるたび、同じ失敗を繰り返す。
+
+## このツールの考え方
+
+**失敗を検出するだけでなく、失敗パターンを蓄積する**。
+
+```
+┌─────────────────┐
+│  PDF書類        │
+│  （契約書等）    │
+└────────┬────────┘
+         ▼
+┌─────────────────┐
+│  AIチェック     │ ← 過去の失敗パターンを参照
+│  (Gemini)       │
+└────────┬────────┘
+         ▼
+┌─────────────────┐     ┌─────────────────┐
+│  結果をPDFに    │────▶│  ガイドライン   │
+│  埋め込み保存   │     │  自動更新       │
+└─────────────────┘     └─────────────────┘
+                              │
+                              ▼
+                        次回のチェックに反映
+```
+
+1. **チェック結果をPDFに埋め込む** - 解析結果がファイルと一緒に残る
+2. **失敗パターンをガイドライン化** - 検出した問題を `.guidelines.json` に蓄積
+3. **次回チェック時に参照** - 同じフォルダの書類は過去の失敗パターンを踏まえてチェック
+
+## 使い方
+
+### 右クリックでチェック
+
+1. PDFファイルを右クリック
+2. 「書類チェック」を選択
+3. AIが整合性をチェック
+4. 結果がPDFに埋め込まれる
+
+### 監視モード
+
+1. フォルダを指定して監視開始
+2. PDFが追加/更新されると自動でチェック
+3. 結果を通知
+
+### ガイドライン生成
+
+過去にチェックしたPDFから失敗パターンを抽出:
+
+1. チェック済みのPDFを選択
+2. 「ガイドライン生成」を実行
+3. 検出された問題が `.guidelines.json` に保存
+4. 以降のチェックで自動参照
+
+## スクリーンショット / デモ
+
+![右クリックチェックのイメージ](docs/screenshots/context-menu.png)
+
+![ガイドライン蓄積のイメージ](docs/screenshots/guidelines.png)
+
+![監視モードのデモ](docs/screenshots/watch-mode.gif)
+
+## 対応書類タイプ
+
+| 書類タイプ | チェック項目例 |
+|-----------|---------------|
+| 契約書 | 金額計算、工期日付、当事者名の一貫性 |
+| 見積書 | 数量×単価の計算、税込/税抜 |
+| 請求書 | 金額、日付、宛先 |
+| 交通誘導員配置表 | 人数と名前リストの一致、時間計算 |
+| 測量図面 | 縦断/横断の計画高・地盤高の照合 |
+
+ファイル名から書類タイプを自動判定し、該当するガイドラインのみ適用。
+
+## 技術スタック
+
+- **フロントエンド**: Tauri + Vanilla JS
+- **バックエンド**: Rust
+- **AI**: Gemini API（cli-ai-analyzer経由）
+- **PDF処理**: Poppler（テキスト抽出）
+
+## インストール
+
+```powershell
+# 右クリックメニューに追加（Claude CLIを利用）
+.\install-context-menu.ps1
+
+# 削除する場合
+.\uninstall-context-menu.ps1
+```
+
+### 右クリックメニューの動作
+
+- `install-context-menu.ps1` は `HKCU\Software\Classes\SystemFileAssociations\.pdf\shell\AIAnalyze` を登録
+- `%LOCALAPPDATA%\ShoruiChecker\pdf-analyze.cmd` を作成し、複数PDFを一括でClaude CLIへ渡す
+- 「AI Analyze (Claude)」として表示され、複数選択に対応
+- `uninstall-context-menu.ps1` はレジストリ設定を削除（ラッパーCMDは残る）
+
+## 設定
+
+- **監視フォルダ**: 自動チェックするフォルダ
+- **AIモデル**: gemini-2.0-flash-exp（デフォルト）
+
+## 仕組み
+
+### PDF埋め込み
+
+チェック結果はPDFのメタデータに埋め込まれる:
+- 解析結果
+- チェック日時
+- 使用したカスタム指示
+
+同じPDFを開くと、過去のチェック結果が表示される。
+
+### ガイドライン
+
+`.guidelines.json` 構造:
+
+```json
+{
+  "common": [
+    "税込/税抜の混在に注意",
+    "日付の西暦/和暦混在"
+  ],
+  "categories": {
+    "契約書": [
+      "工事価格 + 消費税 = 請負代金額の計算確認",
+      "着工日 < 完成日の日付順序"
+    ],
+    "交通誘導員": [
+      "人数欄と名前リストの一致確認"
+    ]
+  }
+}
+```
+
+## 既存ツールとの違い
+
+| ツール | アプローチ |
+|--------|-----------|
+| 一般的なPDFチェッカー | 決まったルールでチェック |
+| このツール | **失敗から学んで**ルールを蓄積 |
+
+同じミスを二度としないためのツール。
+
+## 依存クレート
+
+- [cli-ai-analyzer](https://github.com/YuujiKamura/cli-ai-analyzer) - AI呼び出し
+
+## ライセンス
+
+MIT
