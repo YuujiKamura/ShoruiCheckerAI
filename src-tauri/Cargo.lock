@@ -1571,6 +1571,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gui-shell"
+version = "0.1.0"
+dependencies = [
+ "tauri",
+ "tauri-plugin-dialog",
+ "tauri-plugin-notification",
+ "tauri-plugin-opener",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3737,6 +3747,7 @@ dependencies = [
  "cli-ai-analyzer",
  "dirs 5.0.1",
  "folder-watcher",
+ "gui-shell",
  "lopdf",
  "notify",
  "pdf-analysis-embed",

@@ -25,6 +25,7 @@ dirs = "5"
 chrono = "0.4"
 lopdf = "0.34"
 base64 = "0.22.1"
+gui-shell = { path = "../../gui-shell" }
 ai-code-review = { path = "../../ai-code-review" }
 cli-ai-analyzer = { path = "../../cli-ai-analyzer" }
 pdf-analysis-embed = { path = "../../pdf-analysis-embed" }

@@ -1,9 +1,6 @@
 use std::thread;
 use std::time::Duration;
 
-use tauri::menu::{Menu, MenuItem};
-use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::Manager;
 
 mod analysis;
 mod code_review;
@@ -24,47 +21,9 @@ pub use analysis::analyze_headless;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_notification::init())
+    gui_shell::install_plugins(tauri::Builder::default())
         .setup(|app| {
-            // Create system tray
-            let quit = MenuItem::with_id(app, "quit", "終了", true, None::<&str>)?;
-            let show = MenuItem::with_id(app, "show", "表示", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &quit])?;
-
-            let _tray = TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap().clone())
-                .menu(&menu)
-                .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| match event.id.as_ref() {
-                    "quit" => {
-                        app.exit(0);
-                    }
-                    "show" => {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
-                    }
-                    _ => {}
-                })
-                .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        let app = tray.app_handle();
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
-                    }
-                })
-                .build(app)?;
+            let _tray = gui_shell::setup_tray(&app.handle())?;
 
             // Start watcher if folder is configured
             let settings = settings::load_settings();

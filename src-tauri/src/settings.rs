@@ -53,3 +53,13 @@ pub fn set_model(model: String) -> Result<(), String> {
     save_settings(&settings)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::DEFAULT_MODEL;
+
+    #[test]
+    fn default_model_is_set() {
+        assert!(!DEFAULT_MODEL.is_empty());
+    }
+}
