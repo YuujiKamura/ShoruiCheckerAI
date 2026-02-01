@@ -62,4 +62,9 @@ mod tests {
     fn default_model_is_set() {
         assert!(!DEFAULT_MODEL.is_empty());
     }
+
+    #[test]
+    fn default_model_is_gemini() {
+        assert!(DEFAULT_MODEL.contains("gemini"));
+    }
 }
