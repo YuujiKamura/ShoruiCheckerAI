@@ -206,7 +206,10 @@ Windowsなら `src-tauri/target/release/shoruichecker.exe` を実行。
 
 ## 依存クレート
 
+- [ai-code-review](https://github.com/YuujiKamura/ai-code-review) - コードレビュー連携
 - [cli-ai-analyzer](https://github.com/YuujiKamura/cli-ai-analyzer) - AI呼び出し
+- [pdf-analysis-embed](https://github.com/YuujiKamura/pdf-analysis-embed) - PDF解析/埋め込み補助
+- [folder-watcher](https://github.com/YuujiKamura/folder-watcher) - フォルダ監視
 
 ## ライセンス
 
