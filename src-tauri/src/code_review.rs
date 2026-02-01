@@ -1,40 +1,16 @@
-use std::collections::HashMap;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::mpsc::channel;
-use std::sync::Mutex;
-use std::thread;
-use std::time::Instant;
+//! Code review module using ai-code-review crate
 
-use notify::{Event, EventKind, RecursiveMode, Watcher};
+use std::path::Path;
+use std::sync::Mutex;
+
+use ai_code_review::{Backend, CodeReviewer, PromptType};
 use tauri::{AppHandle, Emitter};
 
-#[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
-
-#[cfg(target_os = "windows")]
-use crate::CREATE_NO_WINDOW;
-
 use crate::events::{CodeReviewEvent, LogEvent};
-use crate::gemini_cli::{run_gemini_in_temp, GeminiRequest};
-use crate::settings::{load_settings, save_settings, DEFAULT_MODEL};
+use crate::settings::{load_settings, save_settings};
 
-// Debounce duration for code review (500ms)
-const CODE_REVIEW_DEBOUNCE_MS: u64 = 500;
-
-// Code file extensions to watch
-const CODE_EXTENSIONS: &[&str] = &["rs", "ts", "tsx", "js", "py"];
-
-// Global state for watcher
-static CODE_WATCHER_HANDLE: Mutex<Option<notify::RecommendedWatcher>> = Mutex::new(None);
-static CODE_REVIEW_STATE: Mutex<Option<CodeWatcherState>> = Mutex::new(None);
-
-/// コード監視の状態管理
-struct CodeWatcherState {
-    last_review: HashMap<PathBuf, Instant>,
-    review_log: PathBuf,
-}
+/// Global state for the code reviewer
+static CODE_REVIEWER: Mutex<Option<CodeReviewer>> = Mutex::new(None);
 
 #[tauri::command]
 pub fn get_code_watch_folder() -> Option<String> {
@@ -52,7 +28,6 @@ pub fn set_code_watch_folder(app: AppHandle, folder: String) -> Result<(), Strin
     settings.code_watch_folder = Some(folder.clone());
     save_settings(&settings)?;
 
-    // Start watcher if enabled
     if settings.code_review_enabled {
         start_code_watcher(app, &folder)?;
     }
@@ -80,311 +55,78 @@ pub fn stop_code_watching() -> Result<(), String> {
     stop_code_watcher()
 }
 
-/// コードレビュー結果ログのパスを取得
-fn get_code_review_log_path(folder: &str) -> PathBuf {
-    Path::new(folder).join(".code-reviews.log")
-}
-
-/// ファイルがコード監視対象か判定
-fn is_code_file(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .map(|e| CODE_EXTENSIONS.contains(&e.to_lowercase().as_str()))
-        .unwrap_or(false)
-}
-
-/// git diffを取得（unstaged変更）
-fn get_git_diff(file_path: &Path) -> Option<String> {
-    let file_str = file_path.to_string_lossy();
-    let parent = file_path.parent()?;
-
-    let mut cmd = Command::new("git");
-    cmd.args(["diff", "--", &file_str]).current_dir(parent);
-    #[cfg(target_os = "windows")]
-    cmd.creation_flags(CREATE_NO_WINDOW);
-
-    let output = cmd.output().ok()?;
-    if output.status.success() {
-        let diff = String::from_utf8_lossy(&output.stdout).to_string();
-        if diff.trim().is_empty() {
-            // No unstaged changes, try staged
-            let mut cmd2 = Command::new("git");
-            cmd2
-                .args(["diff", "--cached", "--", &file_str])
-                .current_dir(parent);
-            #[cfg(target_os = "windows")]
-            cmd2.creation_flags(CREATE_NO_WINDOW);
-
-            let output2 = cmd2.output().ok()?;
-            if output2.status.success() {
-                let diff2 = String::from_utf8_lossy(&output2.stdout).to_string();
-                if !diff2.trim().is_empty() {
-                    return Some(diff2);
-                }
-            }
-            None
-        } else {
-            Some(diff)
-        }
-    } else {
-        None
-    }
-}
-
-/// ファイル全体を読み取る（gitリポジトリ外用）
-fn read_file_content(file_path: &Path) -> Option<String> {
-    fs::read_to_string(file_path).ok()
-}
-
-/// コード変更をGemini CLIでレビュー
-fn review_code_change(file_path: &Path, content: &str, model: &str) -> Result<String, String> {
-    let file_name = file_path
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "unknown".to_string());
-
-    let prompt = format!(
-        r#"以下のコード変更をアーキテクチャの観点からレビューしてください。
-
-ファイル: {}
-
-```
-{}
-```
-
-## レビュー観点（優先度順）
-1. 設計・アーキテクチャ
-   - この変更はこのファイルにあるべきか（責務の分離）
-   - 関数/モジュールの肥大化につながっていないか
-   - 適切な抽象化がされているか
-2. コード品質
-   - 関数が長すぎないか（50行超えは要注意）
-   - 重複コードはないか
-   - 命名は適切か
-3. バグ・セキュリティ（明らかな問題のみ）
-
-## 出力形式
-- 問題がある場合は「⚠」で具体的に指摘
-- 設計改善の提案があれば「💡」で提案
-- 問題がない場合は「✓ 問題なし」
-- 簡潔に（5行以内）"#,
-        file_name,
-        content
-    );
-
-    let request = GeminiRequest::text(&prompt, model);
-    run_gemini_in_temp(".shoruichecker_code_review_temp", &request)
-        .map_err(|e| e.to_string())
-}
-
-/// レビュー結果をログに追記（JSON Lines形式）
-fn append_review_log(log_path: &Path, event: &CodeReviewEvent) -> Result<(), String> {
-    use std::io::Write;
-    let json = serde_json::to_string(event).map_err(|e| e.to_string())?;
-    let mut file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_path)
-        .map_err(|e| e.to_string())?;
-    writeln!(file, "{}", json).map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-/// コード監視を開始
+/// Start the code watcher using CodeReviewer
 pub(crate) fn start_code_watcher(app: AppHandle, folder: &str) -> Result<(), String> {
-    // Stop existing watcher
-    {
-        let mut handle = CODE_WATCHER_HANDLE.lock().map_err(|e| e.to_string())?;
-        *handle = None;
-    }
+    // Stop existing watcher first
+    stop_code_watcher()?;
 
-    let folder_path = PathBuf::from(folder);
+    let folder_path = Path::new(folder);
     if !folder_path.exists() {
         return Err("フォルダが存在しません".to_string());
     }
 
-    // Initialize state
-    {
-        let mut state = CODE_REVIEW_STATE.lock().map_err(|e| e.to_string())?;
-        *state = Some(CodeWatcherState {
-            last_review: HashMap::new(),
-            review_log: get_code_review_log_path(folder),
-        });
-    }
-
-    let (tx, rx) = channel();
-
-    let mut watcher = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
-        if let Ok(event) = res {
-            let _ = tx.send(event);
-        }
-    })
-    .map_err(|e| e.to_string())?;
-
-    watcher
-        .watch(&folder_path, RecursiveMode::Recursive)
-        .map_err(|e| e.to_string())?;
-
-    // Store watcher handle
-    {
-        let mut handle = CODE_WATCHER_HANDLE.lock().map_err(|e| e.to_string())?;
-        *handle = Some(watcher);
-    }
-
+    let log_path = folder_path.join(".code-reviews.log");
     let app_clone = app.clone();
-    let model = load_settings()
-        .model
-        .unwrap_or_else(|| DEFAULT_MODEL.to_string());
 
-    thread::spawn(move || {
-        while let Ok(event) = rx.recv() {
-            // Handle Create and Modify events for code files
-            match event.kind {
-                EventKind::Create(_) | EventKind::Modify(_) => {
-                    for path in event.paths {
-                        if !is_code_file(&path) {
-                            continue;
-                        }
+    let mut reviewer = CodeReviewer::new(folder_path)
+        .map_err(|e| e.to_string())?
+        .with_backend(Backend::Gemini)
+        .with_extensions(&["rs", "ts", "tsx", "js", "py"])
+        .with_prompt_type(PromptType::Default)
+        .with_log_file(&log_path)
+        .on_review(move |result| {
+            let event = CodeReviewEvent {
+                path: result.path.to_string_lossy().to_string(),
+                name: result.name.clone(),
+                review_result: result.review.clone(),
+                timestamp: result.timestamp.clone(),
+                has_issues: result.has_issues,
+            };
 
-                        // Check debounce
-                        let should_review = {
-                            let mut state_lock = match CODE_REVIEW_STATE.lock() {
-                                Ok(s) => s,
-                                Err(_) => continue,
-                            };
-                            if let Some(ref mut state) = *state_lock {
-                                let now = Instant::now();
-                                if let Some(last) = state.last_review.get(&path) {
-                                    if now.duration_since(*last).as_millis()
-                                        < CODE_REVIEW_DEBOUNCE_MS as u128
-                                    {
-                                        false
-                                    } else {
-                                        state.last_review.insert(path.clone(), now);
-                                        true
-                                    }
-                                } else {
-                                    state.last_review.insert(path.clone(), now);
-                                    true
-                                }
-                            } else {
-                                false
-                            }
-                        };
+            // Emit review complete event
+            let _ = app_clone.emit("code-review-complete", event.clone());
 
-                        if !should_review {
-                            continue;
-                        }
+            // Emit log event
+            let _ = app_clone.emit(
+                "log",
+                LogEvent {
+                    message: format!(
+                        "✓ レビュー完了: {} {}",
+                        result.name,
+                        if result.has_issues { "(問題あり)" } else { "" }
+                    ),
+                    level: if result.has_issues { "info" } else { "success" }.to_string(),
+                },
+            );
 
-                        // Get diff or file content
-                        let content = get_git_diff(&path).or_else(|| read_file_content(&path));
-
-                        let content = match content {
-                            Some(c) if !c.trim().is_empty() => c,
-                            _ => continue,
-                        };
-
-                        let path_str = path.to_string_lossy().to_string();
-                        let name = path
-                            .file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_else(|| "unknown".to_string());
-
-                        // Log that we're reviewing
-                        let _ = app_clone.emit(
-                            "log",
-                            LogEvent {
-                                message: format!("コードレビュー中: {}", name),
-                                level: "wave".to_string(),
-                            },
-                        );
-
-                        // Review in background
-                        let model_clone = model.clone();
-                        let app_for_review = app_clone.clone();
-                        let path_for_review = path.clone();
-
-                        thread::spawn(move || match review_code_change(
-                            &path_for_review,
-                            &content,
-                            &model_clone,
-                        ) {
-                            Ok(result) => {
-                                let has_issues = result.contains("⚠");
-                                let timestamp =
-                                    chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-
-                                let event = CodeReviewEvent {
-                                    path: path_str.clone(),
-                                    name: name.clone(),
-                                    review_result: result.clone(),
-                                    timestamp: timestamp.clone(),
-                                    has_issues,
-                                };
-
-                                // Append to log
-                                if let Ok(state_lock) = CODE_REVIEW_STATE.lock() {
-                                    if let Some(ref state) = *state_lock {
-                                        let _ = append_review_log(&state.review_log, &event);
-                                    }
-                                }
-
-                                // Emit event to frontend
-                                let _ = app_for_review.emit("code-review-complete", event.clone());
-
-                                // Log completion
-                                let _ = app_for_review.emit(
-                                    "log",
-                                    LogEvent {
-                                        message: format!(
-                                            "✓ レビュー完了: {} {}",
-                                            name,
-                                            if has_issues { "(問題あり)" } else { "" }
-                                        ),
-                                        level: if has_issues { "info" } else { "success" }
-                                            .to_string(),
-                                    },
-                                );
-
-                                // Show notification only if issues found
-                                if has_issues {
-                                    let _ = app_for_review.emit(
-                                        "show-notification",
-                                        serde_json::json!({
-                                            "title": "コードレビュー",
-                                            "body": format!("{}: 問題が検出されました", name),
-                                            "path": path_str
-                                        }),
-                                    );
-                                }
-                            }
-                            Err(e) => {
-                                let _ = app_for_review.emit(
-                                    "log",
-                                    LogEvent {
-                                        message: format!("レビューエラー: {} - {}", name, e),
-                                        level: "error".to_string(),
-                                    },
-                                );
-                            }
-                        });
-                    }
-                }
-                _ => {}
+            // Show notification only if issues found
+            if result.has_issues {
+                let _ = app_clone.emit(
+                    "show-notification",
+                    serde_json::json!({
+                        "title": "コードレビュー",
+                        "body": format!("{}: 問題が検出されました", result.name),
+                        "path": result.path.to_string_lossy().to_string()
+                    }),
+                );
             }
-        }
-    });
+        });
+
+    reviewer.start().map_err(|e| e.to_string())?;
+
+    // Store the reviewer
+    let mut handle = CODE_REVIEWER.lock().map_err(|e| e.to_string())?;
+    *handle = Some(reviewer);
 
     Ok(())
 }
 
-/// コード監視を停止
+/// Stop the code watcher
 fn stop_code_watcher() -> Result<(), String> {
-    let mut handle = CODE_WATCHER_HANDLE.lock().map_err(|e| e.to_string())?;
-    *handle = None;
-
-    let mut state = CODE_REVIEW_STATE.lock().map_err(|e| e.to_string())?;
-    *state = None;
-
+    let mut handle = CODE_REVIEWER.lock().map_err(|e| e.to_string())?;
+    if let Some(mut reviewer) = handle.take() {
+        // Ignore NotRunning error
+        let _ = reviewer.stop();
+    }
     Ok(())
 }
