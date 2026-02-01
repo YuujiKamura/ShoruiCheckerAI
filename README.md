@@ -87,14 +87,6 @@
 3. AIが整合性をチェック
 4. 結果がPDFに埋め込まれる
 
-## スクリーンショット / デモ
-
-![右クリックチェックのイメージ](docs/screenshots/context-menu.png)
-
-![ガイドライン蓄積のイメージ](docs/screenshots/guidelines.png)
-
-![監視モードのデモ](docs/screenshots/watch-mode.gif)
-
 ## 対応書類タイプ
 
 | 書類タイプ | チェック項目例 |
